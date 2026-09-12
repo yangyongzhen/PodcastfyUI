@@ -6,6 +6,7 @@ export type TaskStatus =
   | "generating"
   | "synthesizing"
   | "muxing"
+  | "exporting"
   | "completed"
   | "failed"
   | "cancelled";
@@ -29,6 +30,10 @@ export interface Task {
   created_at: string;
   transcript_path: string | null;
   audio_path: string | null;
+  /** 已导出的视频（横版 video.mp4 / 竖版 video-portrait.mp4）。 */
+  video_path: string | null;
+  /** 视频导出失败原因；与 error 分开——音频产物仍然有效。 */
+  video_error: string | null;
 }
 
 export interface ApiKeys {
@@ -47,6 +52,22 @@ export interface LlmConfig {
   base_url: string;
   temperature: number;
   max_tokens: number;
+}
+
+export interface VideoConfig {
+  /** "landscape"（16:9）| "portrait"（9:16）—— 一次只出一种画幅。 */
+  aspect: string;
+  /** "wave"（波形/频谱，L2）| "cover"（静态封面，L1）。 */
+  style: string;
+  /** "generated"（应用自绘底图）| "custom"（用 cover_path）。 */
+  cover: string;
+  cover_path: string;
+  /** 画面主标题，空 = 用任务标题。 */
+  title: string;
+  /** 画面副标题，空 = 不画。 */
+  subtitle: string;
+  /** 自定义中文字体路径，空 = 用随包字体。 */
+  font_path: string;
 }
 
 export interface VoiceConfig {

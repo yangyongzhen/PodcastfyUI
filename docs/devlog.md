@@ -1,5 +1,48 @@
 # 开发日志
 
+## 2026-09-13 · 视频导出（L1 静态封面 + L2 波形）落地 + 真机实测
+
+### 目标
+把已完成的 mp3 直接变成能上传的 mp4（波形/封面画面 + 中文标题烧入），横版竖版由**一个
+配置项**决定，且不跟跑 —— 手动触发，避免每次生成都多付一份编码时间。路线见 `docs/roadmap.md`。
+
+### 完成
+- `src-tauri/src/video/mod.rs`：滤镜图组装、前置校验（ffmpeg / 音频 / 字体 / 封面图）、
+  `export()`、字体三级查找（自定义 → 资源目录 → 仓库内）。
+- 配置：`VideoConfig` + `video.json`（`get_video_config` / `save_video_config`）。
+- 队列：`TaskStatus::Exporting`、`video_path` / `video_error`、`export_video_task` /
+  `open_video_file`；`pipeline::export_video` 作为**可选第五阶段**，失败只写 `video_error`，
+  音频产物不受影响。
+- 前端：设置页「视频导出」区块（画幅 / 风格 / 封面 / 标题 / 字体 + 字体状态 +
+  「选择字体文件…」）；任务卡片加「导出视频 / 打开视频文件」、应用内 `<video>` 预览与失败提示。
+- 中文字体随包：`src-tauri/fonts/DroidSansFallbackFull.ttf`（4.0 MB，Apache-2.0），
+  `tauri.conf.json` 声明 `resources: fonts/*` —— 系统里只有 1 个中文字体，不随包会出方块字。
+
+### 实测（真实双人对谈 mp3：202.4 秒 / 2.32 MB）
+| 用例 | 分辨率 | 产物 | 编码耗时 |
+|---|---|---|---|
+| 横版波形 | 1280×720 | 28.77 MB | 58.8 s |
+| 竖版波形 | 720×1280 | 47.72 MB | 60.2 s |
+| 横版静态封面（自绘渐变） | 1280×720 | 7.55 MB | 89.1 s |
+
+复跑：`cd src-tauri && cargo run --example video_export_test`（`EP_AUDIO` 可换输入音频）。
+
+### 结论（`VIDEO EXPORT PASS`）
+- 4 组导出 `ffprobe` 分辨率 / 编码 / 时长全部符合预期；两条失败路径（封面图不存在、
+  字体不存在）被提前拦截，而不是产出一个坏 mp4。
+- **中文确实烧进画面**：同配置再出一版无标题做对照，画面顶部亮度（YAVG）36.01 vs 16.00。
+- **音频未被破坏**：整轮导出前后 mp3 大小与 md5 完全一致（全程只读输入）。
+
+### 踩坑记录
+- `metadata=print`（取 `lavfi.signalstats.YAVG`）的输出走 ffmpeg 的 **info** 日志：
+  命令里带 `-v error` 会把要解析的数值一起吞掉，取证脚本静默拿到空值 —— 看起来像
+  「代码没画字」，实际是取证方式错了。
+- 一次 debug 代码生成 + 增量产物吃掉约 2G 磁盘（根分区一度只剩 731M）：大编译前先
+  `df -h /`；紧张时清本项目 `target/debug/incremental`（**不**动 `deps/*.rlib`）。
+- 竖版产物比横版大 66%（47.72 MB vs 28.77 MB），同为 25 fps：竖版整帧都是波形运动区域，
+  x264 更难压（推测，未单独做对照实验）。要控体积应对竖版单独降 crf 或降帧率。
+- 自绘渐变封面反而比波形慢（89.1 s > 58.8 s）：`gradients` 是逐帧重新生成的源。
+
 ## 2026-09-12 · 端到端冒烟测试（4/4 通过）
 
 ### 方法

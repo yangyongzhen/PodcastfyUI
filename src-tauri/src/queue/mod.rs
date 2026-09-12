@@ -21,6 +21,8 @@ pub enum TaskStatus {
     Generating,
     Synthesizing,
     Muxing,
+    /// 可选第五阶段：把已完成的 mp3 导出成视频（失败不回退 mp3 产物）。
+    Exporting,
     Completed,
     Failed,
     Cancelled,
@@ -55,6 +57,10 @@ pub struct Task {
     pub created_at: String,
     pub transcript_path: Option<String>,
     pub audio_path: Option<String>,
+    /// 已导出的视频路径（横版 `video.mp4` / 竖版 `video-portrait.mp4`）。
+    pub video_path: Option<String>,
+    /// 上一次视频导出失败的原因；与 `error` 分开，避免污染已成功的音频产物。
+    pub video_error: Option<String>,
 }
 
 pub struct QueueManager {
@@ -114,6 +120,8 @@ impl QueueManager {
             created_at: now_iso(),
             transcript_path: None,
             audio_path: None,
+            video_path: None,
+            video_error: None,
         };
         self.tasks.lock().unwrap().insert(id.clone(), task.clone());
         let _ = app.emit("task-update", &task);
@@ -326,5 +334,26 @@ pub fn save_transcript(
 pub fn open_audio_file(state: State<'_, Arc<QueueManager>>, id: String) -> Result<(), String> {
     let t = state.get(&id).ok_or_else(|| format!("task not found: {id}"))?;
     let p = t.audio_path.clone().ok_or("no audio file yet")?;
+    tauri_plugin_opener::open_path(&p, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// 导出视频（可选第五阶段）。返回更新后的任务，前端可直接刷新卡片。
+///
+/// 失败时音频产物保持不变：错误记在 `video_error`，任务状态仍是 `completed`。
+#[tauri::command]
+pub async fn export_video_task(
+    app: AppHandle,
+    state: State<'_, Arc<QueueManager>>,
+    id: String,
+) -> Result<Task, String> {
+    let queue: &Arc<QueueManager> = state.inner();
+    pipeline::export_video(queue, &app, &id).await?;
+    state.get(&id).ok_or_else(|| format!("task not found: {id}"))
+}
+
+#[tauri::command]
+pub fn open_video_file(state: State<'_, Arc<QueueManager>>, id: String) -> Result<(), String> {
+    let t = state.get(&id).ok_or_else(|| format!("task not found: {id}"))?;
+    let p = t.video_path.clone().ok_or("no video file yet")?;
     tauri_plugin_opener::open_path(&p, None::<&str>).map_err(|e| e.to_string())
 }

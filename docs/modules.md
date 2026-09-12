@@ -75,20 +75,42 @@ error.rs（被所有模块使用）
 - `reencode(src, out)`：同参数重编码，保证格式一致。
 - 全部 `spawn_blocking` 包 `std::process::Command`，stderr 尾部 800 字符进错误信息。
 
+## video/mod.rs
+
+- `VideoConfig`（定义在 `config/mod.rs`）+ `video.json`：`aspect`（landscape|portrait）、
+  `style`（wave|cover）、`cover`（generated|custom）、`cover_path`、`title`、`subtitle`、
+  `font_path`；读盘时 `normalize()` 归一非法枚举值。
+- `resolve_font(font_path, resource_dir)`：三级查找 —— 自定义路径 → 资源目录
+  `fonts/DroidSansFallbackFull.ttf` → 仓库内（开发期）；三级都没有就**提前报错**，
+  而不是画出一屏方块字。
+- `export(audio, out, cfg, title, subtitle, resource_dir, progress)`：组装滤镜图后调 ffmpeg。
+  文字走临时 `textfile`（所以中文、引号、冒号、逗号都无需转义），编码结束清理临时文件。
+- 四种滤镜图：横版/竖版波形（`showwaves=mode=cline` 品牌青）、自绘渐变（`gradients`）、
+  自选图（`scale` 铺满 + `crop` 居中裁切）；统一 `libx264 -crf 23 -pix_fmt yuv420p`
+  + `aac 160k` + `-shortest`。
+- `output_path()`：横版 `video.mp4` / 竖版 `video-portrait.mp4` —— 同一任务两种画幅可并存。
+- 命令：`video_font_status`（设置页据此显示实际使用的中文字体）。
+- 前端接线：设置页「视频导出」区块读写 `video.json`；任务卡片「导出视频 / 打开视频文件」
+  两个按钮 + 应用内 `<video>` 预览；导出失败在卡片上显示 `video_error`。
+- 只读输入音频：整轮导出前后 mp3 的 md5 不变。
+
 ## queue/mod.rs + queue/pipeline.rs
 
 - `TaskStatus` 状态机：`pending → extracting → generating → synthesizing → muxing → completed`，
-  任意阶段可 `failed / cancelled`。
+  另有**可选的第五阶段** `exporting`（不跟跑）；任意阶段可 `failed / cancelled`。
 - `QueueManager`：`Arc<Mutex<HashMap<id, Task>>>`，`Clone` 只复制 Arc（闭包捕获安全）；
   `update()` 内修改 + `emit("task-update")`。
 - 命令：`start_task / list_tasks / get_task / cancel_task / delete_task /
-  get_transcript / save_transcript / open_audio_file`。
+  get_transcript / save_transcript / open_audio_file / export_video_task / open_video_file`。
 - `pipeline::run` 四阶段与进度映射：
   - 抽取 0→15%（URL 4 并发批处理，`AtomicUsize` 计数）
   - 生成 15→50%（generator 的 progress 回调重映射）
   - TTS 50→90%（`split_transcript` 按 PERSON_1/2 切句，每 3 句一批 join_all）
   - 拼接 90→100%
-- 产物：`app_data_dir/tasks/{id}/{transcript.txt, podcast.mp3, parts/*.mp3}`。
+- `pipeline::export_video`：把已完成的 mp3 导出成视频（手动触发）。**失败只写
+  `task.video_error`**，状态回到 `completed`，音频产物不受影响；编码前与收尾各检查一次
+  取消状态，避免把已取消的任务改回完成。
+- 产物：`app_data_dir/tasks/{id}/{transcript.txt, podcast.mp3, parts/*.mp3, video.mp4|video-portrait.mp4}`。
 
 ## 前端（src/）
 

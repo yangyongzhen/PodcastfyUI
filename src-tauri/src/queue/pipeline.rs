@@ -345,6 +345,122 @@ pub async fn synthesize_and_stitch(
     Ok(())
 }
 
+/// 可选第五阶段：把已完成的 mp3 导出成视频（L1 静态封面 / L2 波形）。
+///
+/// 与生成管道解耦，**失败不回退音频产物**：错误只记进 `task.video_error`，任务状态回到
+/// `Completed`，前端可单独提示。取消沿用既有语义——进入编码前检查一次；ffmpeg 编码过程中
+/// 不中断（与「取消不中断已发出的请求」口径一致），所以收尾时再确认一次状态，避免把
+/// 已取消的任务又改回完成。
+pub async fn export_video(queue: &QueueManager, app: &AppHandle, id: &str) -> Result<(), String> {
+    let task = queue.get(id).ok_or_else(|| format!("任务不存在：{id}"))?;
+    if task.status == TaskStatus::Cancelled {
+        return Err("任务已取消".into());
+    }
+    let audio_path = task
+        .audio_path
+        .clone()
+        .ok_or_else(|| "任务还没有音频产物，先完成生成再导出视频".to_string())?;
+    let audio = PathBuf::from(&audio_path);
+    if !audio.is_file() {
+        return Err(format!("音频文件不存在：{audio_path}"));
+    }
+
+    let settings = load_settings(app);
+    let cfg = settings.video.clone();
+    let task_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(WORKSPACE)
+        .join(id);
+    let _ = tokio::fs::create_dir_all(&task_dir).await;
+    let out = crate::video::output_path(&task_dir, &cfg);
+
+    // 标题留空回落任务标题；副标题留空回落播客 tagline。两者都空也能出片（纯视觉）。
+    let title = if cfg.title.trim().is_empty() {
+        task.title.clone()
+    } else {
+        cfg.title.clone()
+    };
+    let subtitle = if cfg.subtitle.trim().is_empty() {
+        settings.conversation.podcast_tagline.clone()
+    } else {
+        cfg.subtitle.clone()
+    };
+
+    let aspect_label = if cfg.aspect == "portrait" {
+        "竖版 9:16"
+    } else {
+        "横版 16:9"
+    };
+    queue.update(id, app, |t| {
+        t.status = TaskStatus::Exporting;
+        t.progress = 2;
+        t.stage = format!("导出视频：{aspect_label}");
+        t.video_error = None;
+    });
+
+    // 进度复用同一套 task-update 事件；100 留给收尾统一落，
+    // 免得出现「进度 100 但 video_path 还没写」的闪烁。
+    let progress = |pct: u8, stage: String| {
+        queue.update(id, app, |t| {
+            t.status = TaskStatus::Exporting;
+            t.progress = pct.clamp(2, 99);
+            t.stage = stage.clone();
+        });
+    };
+
+    let resource_dir = app.path().resource_dir().ok();
+    let result = crate::video::export(
+        &audio,
+        &out,
+        &cfg,
+        &title,
+        &subtitle,
+        resource_dir.as_deref(),
+        &progress,
+    )
+    .await;
+
+    // 收尾前再确认一次取消状态：取消不该被后面的完成覆盖。
+    let was_cancelled = queue
+        .get(id)
+        .map(|t| t.status == TaskStatus::Cancelled)
+        .unwrap_or(false);
+
+    match result {
+        Ok(res) => {
+            if was_cancelled {
+                return Err("任务已取消（视频文件已生成但状态保持已取消）".into());
+            }
+            let dur = res
+                .duration_secs
+                .map(|d| format!("（{d:.0} 秒）"))
+                .unwrap_or_default();
+            queue.update(id, app, |t| {
+                t.status = TaskStatus::Completed;
+                t.progress = 100;
+                t.stage = format!("视频已导出{dur}");
+                t.video_path = Some(res.output.to_string_lossy().to_string());
+                t.video_error = None;
+            });
+            Ok(())
+        }
+        Err(e) => {
+            let msg = format!("视频导出失败：{e}");
+            if !was_cancelled {
+                queue.update(id, app, |t| {
+                    t.status = TaskStatus::Completed;
+                    t.progress = 100;
+                    t.stage = "完成（视频导出失败）".into();
+                    t.video_error = Some(msg.clone());
+                });
+            }
+            Err(msg)
+        }
+    }
+}
+
 pub fn split_transcript(transcript: &str) -> Vec<(&str, &str)> {
     let mut out = Vec::new();
     for line in transcript.lines() {

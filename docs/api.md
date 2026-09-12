@@ -13,6 +13,9 @@
 | `save_llm_config` | `config: LlmConfig` | `()` | 保存 LLM 设置 |
 | `get_conversation_config` | — | `ConversationConfig` | 播客人设 + TTS 音色 |
 | `save_conversation_config` | `config: ConversationConfig` | `()` | 保存会话设置（YAML） |
+| `get_video_config` | — | `VideoConfig` | 视频导出设置（读取时归一化非法枚举值） |
+| `save_video_config` | `config: VideoConfig` | `()` | 保存视频导出设置（JSON） |
+| `video_font_status` | `font_path: string` | `string` | 解析实际使用的中文字体绝对路径（空 = 随包字体） |
 
 ### 数据结构
 
@@ -56,6 +59,8 @@ ConversationConfig {
 | `get_transcript` | `id` | `string \| null` | 转录稿全文 |
 | `save_transcript` | `id, content` | `()` | 覆盖保存转录稿 |
 | `open_audio_file` | `id` | `()` | 用系统默认播放器打开 mp3 |
+| `export_video_task` | `id` | `Task` | 把已完成的 mp3 导出成视频（可选第五阶段，见下） |
+| `open_video_file` | `id` | `()` | 用系统默认播放器打开已导出的 mp4 |
 
 ### 数据结构
 
@@ -72,13 +77,16 @@ Task {
   id, title: string,
   input: TaskInput,
   status: "pending" | "extracting" | "generating" |
-          "synthesizing" | "muxing" | "completed" | "failed" | "cancelled",
+          "synthesizing" | "muxing" | "exporting" |
+          "completed" | "failed" | "cancelled",
   progress: number,   // 0–100
   stage: string,      // 人类可读的阶段描述
   error: string | null,
   created_at: string,
   transcript_path: string | null,
-  audio_path: string | null
+  audio_path: string | null,
+  video_path: string | null,    // 已导出的 mp4（横版 video.mp4 / 竖版 video-portrait.mp4）
+  video_error: string | null    // 视频导出失败原因；与 error 分开，不影响已成功的音频
 }
 ```
 
@@ -98,3 +106,33 @@ const un = await listen<Task>("task-update", (e) => console.log(e.payload));
 ## 音频播放
 
 本地文件用 `convertFileSrc(path)` 转成 `asset://` URL 后直接给 `<audio src>`（Tauri 内置 asset 协议，无需额外权限配置）。
+
+## 视频导出（L1 封面 / L2 波形）
+
+| 项 | 说明 |
+|---|---|
+| 触发方式 | 任务卡片上的「导出视频」按钮。**不自动跟跑**——免得每次生成都多付一次编码时间 |
+| 产物 | 横版 `video.mp4`（1280×720）· 竖版 `video-portrait.mp4`（720×1280），落在任务目录内 |
+| 画幅 | 由 `VideoConfig.aspect` **单选**决定，一次只出一种，不做两版并出 |
+| 风格 | `style = "wave"` 波形（`showwaves`，品牌青）｜ `"cover"` 静态封面 |
+| 封面 | `cover = "generated"` 自绘渐变底图（品牌深底 → 青）｜ `"custom"` 用 `cover_path`，铺满画幅后居中裁切 |
+| 中文文字 | 标题 + 副标题经 `drawtext` 烧进画面；文本走临时 `textfile`，所以中文、引号、冒号、逗号**都不需要转义** |
+| 字体 | 三级查找：`font_path` 自定义 → 资源目录 `fonts/DroidSansFallbackFull.ttf` → 仓库内（开发期）。三级都没有时**提前报错**，不会画出一屏方块 |
+| 失败处理 | 只写 `video_error`，任务状态回到 `completed`，音频产物与 `audio_path` 不受任何影响 |
+| 取消 | 进入编码前检查一次；ffmpeg 编码过程中不中断（与既有口径一致），收尾时不会把已取消的任务改回「完成」 |
+
+配置由 `VideoConfig` 持久化在 `video.json`：
+
+```ts
+VideoConfig {
+  aspect: "landscape" | "portrait",   // 横版 16:9 | 竖版 9:16（单选）
+  style: "wave" | "cover",            // 波形（L2） | 静态封面（L1）
+  cover: "generated" | "custom",      // 自绘底图 | 自选图片
+  cover_path: string,                 // 自选图片路径（cover = "custom" 时生效）
+  title: string,                      // 空 = 用任务标题
+  subtitle: string,                   // 空 = 用播客 tagline
+  font_path: string                   // 空 = 用随包中文字体
+}
+```
+
+导出的 mp4 同样用 `convertFileSrc` 在应用内预览播放（与音频一致）。

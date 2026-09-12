@@ -6,6 +6,7 @@ pub mod generator;
 pub mod health;
 pub mod queue;
 pub mod tts;
+pub mod video;
 
 use queue::QueueManager;
 use std::sync::Arc;
@@ -41,6 +42,11 @@ pub fn run() {
             config::save_llm_config,
             config::get_conversation_config,
             config::save_conversation_config,
+            config::get_video_config,
+            config::save_video_config,
+            video::video_font_status,
+            queue::export_video_task,
+            queue::open_video_file,
             health::test_connection,
             queue::start_task,
             queue::list_tasks,

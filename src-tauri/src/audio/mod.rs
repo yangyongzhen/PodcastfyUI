@@ -123,7 +123,7 @@ pub async fn reencode(src: &Path, out: &Path) -> Result<(), String> {
 }
 
 /// Last `n` chars of a string (for error excerpts).
-fn tail(s: &str, n: usize) -> String {
+pub(crate) fn tail(s: &str, n: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
     if chars.len() <= n {
         s.to_string()

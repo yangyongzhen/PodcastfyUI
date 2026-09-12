@@ -16,6 +16,7 @@ pub(crate) struct Settings {
     pub keys: ApiKeys,
     pub llm: LlmConfig,
     pub conversation: ConversationConfig,
+    pub video: VideoConfig,
 }
 
 pub(crate) fn load_settings(app: &AppHandle) -> Settings {
@@ -30,6 +31,11 @@ pub(crate) fn load_settings(app: &AppHandle) -> Settings {
                 let s = std::fs::read_to_string(d.join("conversation.yaml")).ok()?;
                 serde_yaml::from_str(&s).ok()
             })
+            .unwrap_or_default(),
+        video: dir
+            .as_ref()
+            .ok()
+            .and_then(|d| read_json(&d.join("video.json")))
             .unwrap_or_default(),
     }
 }
@@ -89,6 +95,78 @@ impl Default for LlmConfig {
             temperature: 0.8,
             max_tokens: 4096,
         }
+    }
+}
+
+/// 视频导出设置（L1 静态封面 / L2 波形）。
+///
+/// 独立于播客人设（那属于内容），这里只描述「怎么出片」，存 `video.json`。
+/// 两项字符串枚举式字段都走 [`VideoConfig::normalize`] 归一化，非法值回落到默认，
+/// 保证前端传入任何值都不会让导出阶段崩掉。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VideoConfig {
+    /// 画幅：`"landscape"`（16:9，1280×720）| `"portrait"`（9:16，720×1280）。
+    /// 一次只出一种画幅，由本字段决定，不做两套并出。
+    pub aspect: String,
+    /// 视觉风格：`"wave"`（波形/频谱，L2）| `"cover"`（静态封面，L1）。
+    pub style: String,
+    /// 封面来源：`"generated"`（应用自绘底图）| `"custom"`（用 `cover_path`）。
+    pub cover: String,
+    /// 自定义封面图路径（仅 `cover = "custom"` 时生效）。
+    pub cover_path: String,
+    /// 画面主标题；为空则用任务标题。
+    pub title: String,
+    /// 画面副标题（如播客 tagline）；为空则不画。
+    pub subtitle: String,
+    /// 自定义中文字体文件路径；为空则用随包字体（见 `src-tauri/fonts/`）。
+    pub font_path: String,
+}
+
+impl Default for VideoConfig {
+    fn default() -> Self {
+        Self {
+            aspect: "landscape".into(),
+            style: "wave".into(),
+            cover: "generated".into(),
+            cover_path: String::new(),
+            title: String::new(),
+            subtitle: String::new(),
+            font_path: String::new(),
+        }
+    }
+}
+
+impl VideoConfig {
+    /// 归一化枚举式字段：容忍大小写、中英文别名，其余一律回落默认值。
+    pub fn normalize(&mut self) {
+        self.aspect = match self.aspect.trim().to_lowercase().as_str() {
+            "portrait" | "vertical" | "9:16" | "竖版" | "竖屏" => "portrait".into(),
+            _ => "landscape".into(),
+        };
+        self.style = match self.style.trim().to_lowercase().as_str() {
+            "cover" | "static" | "封面" | "静态封面" => "cover".into(),
+            _ => "wave".into(),
+        };
+        self.cover = match self.cover.trim().to_lowercase().as_str() {
+            "custom" | "file" | "自选" | "自选图" => "custom".into(),
+            _ => "generated".into(),
+        };
+        // 注意：不因 cover != custom 而清空 cover_path——用户来回切换来源时不该丢路径。
+    }
+
+    /// 画幅像素尺寸：横版 1280×720，竖版 720×1280。
+    pub fn size(&self) -> (u32, u32) {
+        if self.aspect == "portrait" {
+            (720, 1280)
+        } else {
+            (1280, 720)
+        }
+    }
+
+    /// 是否需要用户提供封面图（自选来源但没给图 = 需要前端提示）。
+    pub fn needs_cover_file(&self) -> bool {
+        self.cover == "custom" && self.cover_path.trim().is_empty()
     }
 }
 
@@ -292,5 +370,34 @@ pub fn save_conversation_config(app: AppHandle, config: ConversationConfig) -> R
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let s = serde_yaml::to_string(&config).map_err(|e| e.to_string())?;
+    std::fs::write(&p, s).map_err(|e| e.to_string())
+}
+
+fn video_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_dir(app)?.join("video.json"))
+}
+
+#[tauri::command]
+pub fn get_video_config(app: AppHandle) -> Result<VideoConfig, String> {
+    let p = video_path(&app)?;
+    let mut cfg: VideoConfig = if !p.exists() {
+        VideoConfig::default()
+    } else {
+        let s = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+        serde_json::from_str(&s).map_err(|e| e.to_string())?
+    };
+    // 读时归一化：老配置或被手工改过的文件也保证枚举字段合法。
+    cfg.normalize();
+    Ok(cfg)
+}
+
+#[tauri::command]
+pub fn save_video_config(app: AppHandle, mut config: VideoConfig) -> Result<(), String> {
+    config.normalize();
+    let p = video_path(&app)?;
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let s = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     std::fs::write(&p, s).map_err(|e| e.to_string())
 }

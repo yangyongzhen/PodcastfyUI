@@ -9,6 +9,7 @@ import type {
   LlmConfig,
   Task,
   TaskInput,
+  VideoConfig,
 } from "./types";
 
 export async function startTask(
@@ -71,6 +72,28 @@ export async function saveConversationConfig(
   config: ConversationConfig,
 ): Promise<void> {
   return invoke("save_conversation_config", { config });
+}
+
+export async function getVideoConfig(): Promise<VideoConfig> {
+  return invoke("get_video_config");
+}
+
+export async function saveVideoConfig(config: VideoConfig): Promise<void> {
+  return invoke("save_video_config", { config });
+}
+
+/** 导出视频（可选第五阶段）。失败时后端仍保住音频产物，错误只在 video_error 上。 */
+export async function exportVideo(id: string): Promise<Task> {
+  return invoke("export_video_task", { id });
+}
+
+export async function openVideoFile(id: string): Promise<void> {
+  return invoke("open_video_file", { id });
+}
+
+/** 解析实际会用到的中文字体绝对路径（空串 = 随包字体）。 */
+export async function videoFontStatus(fontPath: string): Promise<string> {
+  return invoke("video_font_status", { fontPath });
 }
 
 /** 连通性探针：kind = "llm" | "tts" | "ffmpeg"，走真实生产请求路径。 */

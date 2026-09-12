@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { open } from "@tauri-apps/plugin-dialog";
   import * as api from "../lib/api";
-  import type { ConversationConfig, LlmConfig } from "../lib/types";
+  import type { ConversationConfig, LlmConfig, VideoConfig } from "../lib/types";
   import { t, LOCALES, getLocale, setLocale, type Locale } from "../lib/i18n.svelte.js";
 
   let keys = $state({ openai: "", anthropic: "", gemini: "", elevenlabs: "", serper: "", doubao_app_id: "", doubao_access_token: "", doubao_resource_id: "volc.service_type.10029", doubao_api_version: "v1" });
@@ -14,6 +15,17 @@
   });
   let conv = $state<ConversationConfig | null>(null);
   let ttsModel = $state("openai");
+  // 与后端 VideoConfig 的默认值对齐：读盘失败时保留这份默认值，页面不留空白。
+  let vid = $state<VideoConfig>({
+    aspect: "landscape",
+    style: "wave",
+    cover: "generated",
+    cover_path: "",
+    title: "",
+    subtitle: "",
+    font_path: "",
+  });
+  let fontStatus = $state("");
   let busy = $state(false);
   let msg = $state("");
   let err = $state("");
@@ -27,11 +39,52 @@
       llm = await api.getLlmConfig();
       conv = await api.getConversationConfig();
       ttsModel = conv.text_to_speech.default_tts_model;
+      vid = await api.getVideoConfig();
+      await refreshFont(vid.font_path);
     } catch (e) {
       err = String(e);
     }
   }
   onMount(load);
+
+  /** 探明实际会用哪个中文字体：失败不该把整页设置带崩，所以单独 try。 */
+  async function refreshFont(path: string) {
+    try {
+      fontStatus = await api.videoFontStatus(path);
+    } catch (e) {
+      fontStatus = t("字体不可用：{err}", { err: String(e) });
+    }
+  }
+
+  async function pickCover() {
+    try {
+      const p = await open({
+        multiple: false,
+        filters: [{ name: t("图片"), extensions: ["png", "jpg", "jpeg", "webp"] }],
+      });
+      if (typeof p === "string") {
+        vid.cover_path = p;
+        vid.cover = "custom";
+      }
+    } catch (e) {
+      err = String(e);
+    }
+  }
+
+  async function pickFont() {
+    try {
+      const p = await open({
+        multiple: false,
+        filters: [{ name: t("字体"), extensions: ["ttf", "otf", "ttc"] }],
+      });
+      if (typeof p === "string") {
+        vid.font_path = p;
+        await refreshFont(p);
+      }
+    } catch (e) {
+      err = String(e);
+    }
+  }
 
   async function save() {
     busy = true;
@@ -44,6 +97,7 @@
         conv.text_to_speech.default_tts_model = ttsModel;
         await api.saveConversationConfig(conv);
       }
+      if (vid) await api.saveVideoConfig(vid);
       msg = t("已保存");
     } catch (e) {
       err = String(e);
@@ -250,6 +304,59 @@
       {/if}
     </div>
   {/if}
+
+  <h3>{t("视频导出")}</h3>
+  <div class="form-grid">
+    <label>{t("画幅")}
+      <select bind:value={vid.aspect}>
+        <option value="landscape">{t("横版 16:9")}</option>
+        <option value="portrait">{t("竖版 9:16（短视频）")}</option>
+      </select>
+    </label>
+    <label>{t("画面风格")}
+      <select bind:value={vid.style}>
+        <option value="wave">{t("波形（推荐）")}</option>
+        <option value="cover">{t("静态封面")}</option>
+      </select>
+    </label>
+    {#if vid.style === "cover"}
+      <label>{t("封面来源")}
+        <select bind:value={vid.cover}>
+          <option value="generated">{t("自动生成渐变底图")}</option>
+          <option value="custom">{t("自选图片")}</option>
+        </select>
+      </label>
+      {#if vid.cover === "custom"}
+        <label>{t("封面图片")}
+          <input type="text" bind:value={vid.cover_path} placeholder="/path/to/cover.png" />
+        </label>
+      {/if}
+    {/if}
+    <label>{t("标题")}
+      <input type="text" bind:value={vid.title} placeholder={t("留空则使用任务标题")} />
+    </label>
+    <label>{t("副标题")}
+      <input type="text" bind:value={vid.subtitle} placeholder={t("留空则使用播客标语")} />
+    </label>
+    <label>{t("自定义中文字体（可选）")}
+      <input
+        type="text"
+        bind:value={vid.font_path}
+        placeholder={t("留空则使用随包字体")}
+        onchange={(e) => refreshFont((e.currentTarget as HTMLInputElement).value)}
+      />
+    </label>
+  </div>
+  <div class="actions">
+    {#if vid.style === "cover" && vid.cover === "custom"}
+      <button class="btn" type="button" onclick={pickCover}>{t("选择图片…")}</button>
+    {/if}
+    <button class="btn" type="button" onclick={pickFont}>{t("选择字体文件…")}</button>
+  </div>
+  <p class="muted">{t("当前中文字体：{path}", { path: fontStatus })}</p>
+  <p class="muted">
+    {t("视频由 ffmpeg 编码，导出在任务卡片上手动触发，不会随生成自动执行。")}
+  </p>
 
   {#if msg}<p class="ok">{msg}</p>{/if}
   {#if err}<p class="err">{err}</p>{/if}

@@ -33,6 +33,7 @@
     "longDescription": "Podcastfy 桌面版：输入网址、YouTube 链接、PDF、纯文本或一个主题，由大模型生成双人对话脚本，再经 TTS 合成并拼接为播客音频（24kHz 单声道 mp3）。",
     "copyright": "Copyright © 2026 PodcastfyUI contributors",
     "licenseFile": "../LICENSE",
+    "resources": ["fonts/*"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

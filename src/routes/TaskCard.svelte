@@ -26,6 +26,8 @@
         return t("语音合成");
       case "muxing":
         return t("音频合成");
+      case "exporting":
+        return t("导出视频");
       case "completed":
         return t("已完成");
       case "failed":
@@ -167,6 +169,33 @@
   }
 
   const audioUrl = $derived(task.audio_path ? api.fileToAssetUrl(task.audio_path) : null);
+
+  // ---- 视频导出（可选第五阶段：L1 封面 / L2 波形） --------------------
+  let exporting = $state(false);
+  const videoUrl = $derived(task.video_path ? api.fileToAssetUrl(task.video_path) : null);
+
+  async function exportVideo() {
+    exporting = true;
+    try {
+      await api.exportVideo(task.id);
+      toast(t("视频已导出"));
+      onRefresh();
+    } catch (e) {
+      // 后端把失败原因记在 video_error 上，音频产物不受影响；刷新后卡片会显示出来。
+      toast(String(e), "err");
+      onRefresh();
+    } finally {
+      exporting = false;
+    }
+  }
+
+  async function openVideo() {
+    try {
+      await api.openVideoFile(task.id);
+    } catch (e) {
+      toast(String(e), "err");
+    }
+  }
 
   // ---- 自定义音频播放器 ----
   const rates = [1, 1.25, 1.5, 2] as const;
@@ -317,11 +346,29 @@
           </div>
         </div>
       {/if}
+
+      {#if videoUrl}
+        <div class="player">
+          <!-- 成片没有独立字幕轨：标题/副标题已烧进画面，故显式忽略该 a11y 提示 -->
+          <!-- svelte-ignore a11y_media_has_caption -->
+          <video class="video" src={videoUrl} controls preload="metadata"></video>
+        </div>
+      {/if}
+      {#if task.video_error}
+        <p class="warn">{t("视频导出失败：{err}", { err: task.video_error })}</p>
+      {/if}
+
       <div class="actions">
         <button class="btn" onclick={toggleTranscript}>
           {showTranscript ? t("收起转录稿") : t("查看/编辑转录稿")}
         </button>
         <button class="btn" onclick={openAudio}>{t("打开音频文件")}</button>
+        <button class="btn" onclick={exportVideo} disabled={exporting || !task.audio_path}>
+          {exporting ? t("导出中…") : t("导出视频")}
+        </button>
+        {#if task.video_path}
+          <button class="btn" onclick={openVideo}>{t("打开视频文件")}</button>
+        {/if}
         <button class="btn" onclick={resynthesize} disabled={resynthesizing}>
           {resynthesizing ? t("合成中…") : t("仅重新合成音频")}
         </button>
@@ -589,5 +636,13 @@
     font-size: var(--fs-md);
     line-height: 1.6;
     word-break: break-word;
+  }
+  /* 视频导出预览：与音频播放器同宽，黑底更接近成片观感 */
+  .video {
+    display: block;
+    width: 100%;
+    max-height: 420px;
+    border-radius: var(--r-md);
+    background: #000;
   }
 </style>
