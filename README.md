@@ -116,6 +116,7 @@ npm run tauri build  # 生产构建，产物在 src-tauri/target/release/bundle/
 - [docs/devlog.md](docs/devlog.md) — 开发日志与踩坑记录
 - [docs/release-readiness.md](docs/release-readiness.md) — 上架就绪度
 - [docs/introducing-podcastfyui.md](docs/introducing-podcastfyui.md) — 项目介绍长文
+- [docs/roadmap.md](docs/roadmap.md) — 后续优化路线：音频 → 视频（L1–L4 分档计划）
 
 ## 📖 延伸阅读
 
@@ -127,7 +128,7 @@ MVP 已完成（2026-09-12）：`cargo check` ✅ · `cargo test` ✅ · `svelte
 
 真实端到端已跑通（2026-09-12，真实三方服务、全程无 mock）：真实 LLM 生成 34 行对话稿 → 豆包 TTS **29/29 行**全部合成成功（人 1 女声 / 人 2 男声）→ ffmpeg 拼接出 **202.5 秒**双人对谈 mp3（24 kHz / 单声道）。
 
-后续：任务持久化 · ElevenLabs / Gemini 多说话人 TTS · 拖拽文件输入 · 应用图标与各平台打包分发（deb / rpm / AppImage → Windows）。
+后续：任务持久化 · ElevenLabs / Gemini 多说话人 TTS · 拖拽文件输入 · 应用图标与各平台打包分发（deb / rpm / AppImage → Windows）· **音频 → 视频导出**（L1–L4 分档计划见 [docs/roadmap.md](docs/roadmap.md)）。
 
 ## License
 
