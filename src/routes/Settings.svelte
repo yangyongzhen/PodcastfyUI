@@ -4,7 +4,7 @@
   import type { ConversationConfig, LlmConfig } from "../lib/types";
   import { t, LOCALES, getLocale, setLocale, type Locale } from "../lib/i18n.svelte.js";
 
-  let keys = $state({ openai: "", anthropic: "", gemini: "", elevenlabs: "", serper: "" });
+  let keys = $state({ openai: "", anthropic: "", gemini: "", elevenlabs: "", serper: "", doubao_app_id: "", doubao_access_token: "", doubao_resource_id: "volc.service_type.10029", doubao_api_version: "v1" });
   let llm = $state<LlmConfig>({
     provider: "openai",
     model: "gpt-4o-mini",
@@ -21,7 +21,9 @@
 
   async function load() {
     try {
-      keys = await api.getApiKeys();
+      keys = (await api.getApiKeys()) as typeof keys;
+      if (!keys.doubao_resource_id) keys.doubao_resource_id = "volc.service_type.10029";
+      if (!keys.doubao_api_version) keys.doubao_api_version = "v1";
       llm = await api.getLlmConfig();
       conv = await api.getConversationConfig();
       ttsModel = conv.text_to_speech.default_tts_model;
@@ -85,6 +87,9 @@
 
 <section class="card">
   <h2>{t("设置")}</h2>
+  <p class="muted">
+    {t("密钥以明文保存在本机应用数据目录，仅靠文件权限保护；除你配置的服务商外不会发往别处，共享电脑请谨慎使用。")}
+  </p>
 
   <div class="form-grid">
     <label>{t("界面语言")}
@@ -99,28 +104,6 @@
     </label>
   </div>
 
-  <h3>{t("API 密钥")}</h3>
-  <p class="muted">
-    {t("密钥以明文保存在本机应用数据目录，仅靠文件权限保护；除你配置的服务商外不会发往别处，共享电脑请谨慎使用。")}
-  </p>
-  <div class="form-grid">
-    <label>OpenAI
-      <input type="password" bind:value={keys.openai} placeholder="sk-…" />
-    </label>
-    <label>Anthropic
-      <input type="password" bind:value={keys.anthropic} placeholder="sk-ant-…" />
-    </label>
-    <label>Gemini
-      <input type="password" bind:value={keys.gemini} placeholder="AIza…" />
-    </label>
-    <label>{t("ElevenLabs（预留）")}
-      <input type="password" bind:value={keys.elevenlabs} placeholder={t("预留")} disabled />
-    </label>
-    <label>{t("Serper（主题搜索，可选）")}
-      <input type="password" bind:value={keys.serper} placeholder={t("不填则用 DuckDuckGo")} />
-    </label>
-  </div>
-
   <h3>{t("LLM（转录稿生成）")}</h3>
   <div class="form-grid">
     <label>Provider
@@ -131,6 +114,24 @@
         <option value="ollama">{t("ollama（本地）")}</option>
       </select>
     </label>
+    {#if llm.provider === "openai"}
+      <label>{t("OpenAI 密钥")}
+        <input type="password" bind:value={keys.openai} placeholder="sk-…" />
+      </label>
+    {/if}
+    {#if llm.provider === "anthropic"}
+      <label>{t("Anthropic 密钥")}
+        <input type="password" bind:value={keys.anthropic} placeholder="sk-ant-…" />
+      </label>
+    {/if}
+    {#if llm.provider === "gemini"}
+      <label>{t("Gemini 密钥")}
+        <input type="password" bind:value={keys.gemini} placeholder="AIza…" />
+      </label>
+    {/if}
+    {#if llm.provider === "ollama"}
+      <p class="muted" style="grid-column: 1 / -1">{t("本地 Ollama 无需密钥。")}</p>
+    {/if}
     <label>Model
       <input type="text" bind:value={llm.model} placeholder="gpt-4o-mini" />
     </label>
@@ -142,6 +143,16 @@
     </label>
     <label>Max tokens
       <input type="number" step="256" min="256" bind:value={llm.max_tokens} />
+    </label>
+  </div>
+
+  <h3>{t("其它（可选）")}</h3>
+  <div class="form-grid">
+    <label>{t("ElevenLabs（预留）")}
+      <input type="password" bind:value={keys.elevenlabs} placeholder={t("预留")} disabled />
+    </label>
+    <label>{t("Serper（主题搜索，可选）")}
+      <input type="password" bind:value={keys.serper} placeholder={t("不填则用 DuckDuckGo")} />
     </label>
   </div>
 
@@ -191,6 +202,7 @@
         <select bind:value={ttsModel}>
           <option value="openai">openai</option>
           <option value="edge">{t("edge（免费）")}</option>
+          <option value="doubao">{t("豆包（火山引擎）")}</option>
         </select>
       </label>
       {#if ttsModel === "openai"}
@@ -207,6 +219,33 @@
         </label>
         <label>{t("Edge 主持人 2")}
           <input type="text" bind:value={conv.text_to_speech.edge.answer} />
+        </label>
+      {/if}
+      {#if ttsModel === "doubao"}
+        <p class="muted" style="grid-column: 1 / -1">{t("仅在选用豆包 TTS 时需要填写以下豆包凭证。")}</p>
+        <label>{t("豆包 App ID")}
+          <input type="text" bind:value={keys.doubao_app_id} placeholder="app-id" />
+        </label>
+        <label>{t("豆包 Access Token")}
+          <input type="password" bind:value={keys.doubao_access_token} placeholder="access-token" />
+        </label>
+        <label>{t("豆包 Resource ID")}
+          <input type="text" bind:value={keys.doubao_resource_id} placeholder="volc.service_type.10029" />
+        </label>
+        <label>{t("豆包 API 版本")}
+          <select bind:value={keys.doubao_api_version}>
+            <option value="v1">v1（ws_binary）</option>
+            <option value="v3">v3（bidirection）</option>
+          </select>
+        </label>
+        <label>{t("豆包集群")}
+          <input type="text" bind:value={conv.text_to_speech.doubao.model} placeholder="volcano_tts" />
+        </label>
+        <label>{t("豆包主持人 1 音色")}
+          <input type="text" bind:value={conv.text_to_speech.doubao.question} />
+        </label>
+        <label>{t("豆包主持人 2 音色")}
+          <input type="text" bind:value={conv.text_to_speech.doubao.answer} />
         </label>
       {/if}
     </div>

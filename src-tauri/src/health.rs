@@ -112,6 +112,7 @@ fn probe_voice(conv: &ConversationConfig, model: &str) -> String {
         "edge" => conv.text_to_speech.edge.question.clone(),
         "elevenlabs" => conv.text_to_speech.elevenlabs.question.clone(),
         "gemini" => conv.text_to_speech.gemini.question.clone(),
+        "doubao" => conv.text_to_speech.doubao.question.clone(),
         _ => conv.text_to_speech.openai.question.clone(),
     }
 }

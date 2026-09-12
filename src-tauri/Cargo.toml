@@ -34,6 +34,11 @@ async-trait = "0.1"
 # http
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
 
+# 豆包（火山引擎）TTS：WebSocket 二进制接口客户端（wss，rustls）
+tokio-tungstenite = { version = "0.24", features = ["connect", "rustls-tls-webpki-roots"] }
+# 豆包 TTS 协议帧的 gzip 压缩 / 解压
+flate2 = "1"
+
 # utils
 thiserror = "2"
 anyhow = "1"

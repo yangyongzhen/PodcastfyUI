@@ -56,6 +56,15 @@ pub struct ApiKeys {
     pub gemini: String,
     pub elevenlabs: String,
     pub serper: String,
+    /// 豆包（火山引擎）TTS：应用 App ID（为空表示未配置）。
+    pub doubao_app_id: String,
+    /// 豆包（火山引擎）TTS：Access Token（为空表示未配置）。
+    pub doubao_access_token: String,
+    /// 豆包（火山引擎）TTS：资源 ID（X-Api-Resource-Id）。大模型 TTS（bigtts 音色）用
+    /// `volc.service_type.10029`；为空时回退到该默认值。
+    pub doubao_resource_id: String,
+    /// 豆包（火山引擎）TTS：协议版本 `"v1"`（ws_binary）| `"v3"`（bidirection）；为空时回退 `v1`。
+    pub doubao_api_version: String,
 }
 
 /// Transcript (LLM) generation settings.
@@ -94,12 +103,13 @@ pub struct VoiceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TtsConfig {
-    /// "openai" | "elevenlabs" | "edge" | "gemini"
+    /// "openai" | "elevenlabs" | "edge" | "gemini" | "doubao"
     pub default_tts_model: String,
     pub openai: VoiceConfig,
     pub elevenlabs: VoiceConfig,
     pub edge: VoiceConfig,
     pub gemini: VoiceConfig,
+    pub doubao: VoiceConfig,
     pub audio_format: String,
     pub ending_message: String,
 }
@@ -127,6 +137,14 @@ impl Default for TtsConfig {
                 question: "en-US-Journey-D".into(),
                 answer: "en-US-Journey-O".into(),
                 model: None,
+            },
+            doubao: VoiceConfig {
+                // 默认音色（火山引擎 voice_type）。question / answer 暂用同一音色，
+                // 用户应在设置中替换为自己所需的男声 / 女声音色。
+                question: "zh_female_wanwanxiaohe_moon_bigtts".into(),
+                answer: "zh_female_wanwanxiaohe_moon_bigtts".into(),
+                // 豆包 TTS 用 model 字段承载 cluster（集群名）。
+                model: Some("volcano_tts".into()),
             },
             audio_format: "mp3".into(),
             ending_message: "See You Next Time!".into(),

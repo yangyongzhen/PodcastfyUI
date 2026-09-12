@@ -37,6 +37,8 @@ export interface ApiKeys {
   gemini: string;
   elevenlabs: string;
   serper: string;
+  doubao_app_id: string;
+  doubao_access_token: string;
 }
 
 export interface LlmConfig {
@@ -58,6 +60,7 @@ export interface TtsConfig {
   openai: VoiceConfig;
   elevenlabs: VoiceConfig;
   edge: VoiceConfig;
+  doubao: VoiceConfig;
   gemini: VoiceConfig;
   audio_format: string;
   ending_message: string;

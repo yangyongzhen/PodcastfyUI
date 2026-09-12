@@ -232,7 +232,8 @@ async fn execute(
             .iter()
             .enumerate()
             .map(|(i, line)| {
-                let (text, voice) = line;
+                let (text, role) = *line;
+                let voice = voice_for_role(&question_voice, &answer_voice, role);
                 let idx = base + i;
                 let out = tmp_dir.join(format!("{idx:04}.mp3"));
                 let provider = &provider;
@@ -384,6 +385,7 @@ fn voice_for(conv: &config::ConversationConfig, model: &str, role: &str) -> Stri
         "elevenlabs" => &conv.text_to_speech.elevenlabs,
         "edge" => &conv.text_to_speech.edge,
         "gemini" => &conv.text_to_speech.gemini,
+        "doubao" => &conv.text_to_speech.doubao,
         _ => &conv.text_to_speech.openai,
     };
     let voice = if role == "answer" {
@@ -391,6 +393,14 @@ fn voice_for(conv: &config::ConversationConfig, model: &str, role: &str) -> Stri
     } else {
         v.question.clone()
     };
+    // 豆包：音色留空时给两位主持人不同的 bigtts 默认音色，避免两个人同一个嗓子。
+    if model.eq_ignore_ascii_case("doubao") && voice.trim().is_empty() {
+        return if role == "answer" {
+            "zh_male_wennuanahu_moon_bigtts".to_string()
+        } else {
+            "zh_female_wanwanxiaohe_moon_bigtts".to_string()
+        };
+    }
     // 简体中文 + edge 模型 + 解析出的音色非中文时，回退到默认中文音色。
     let is_edge = model.eq_ignore_ascii_case("edge");
     let is_zh =
@@ -402,6 +412,26 @@ fn voice_for(conv: &config::ConversationConfig, model: &str, role: &str) -> Stri
         };
     }
     voice
+}
+
+/// 把行角色（`PERSON_1` / `PERSON_2`）映射到该主持人配置好的音色。
+fn voice_for_role<'a>(question: &'a str, answer: &'a str, role: &str) -> &'a str {
+    if role == "PERSON_2" {
+        answer
+    } else {
+        question
+    }
+}
+
+#[cfg(test)]
+mod voice_role_tests {
+    use super::voice_for_role;
+
+    #[test]
+    fn person2_uses_answer_voice() {
+        assert_eq!(voice_for_role("host1", "host2", "PERSON_1"), "host1");
+        assert_eq!(voice_for_role("host1", "host2", "PERSON_2"), "host2");
+    }
 }
 
 fn bump(

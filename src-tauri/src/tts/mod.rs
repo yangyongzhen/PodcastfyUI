@@ -1,8 +1,11 @@
 //! Text-to-speech providers.
 //!
 //! Factory + trait design mirrors upstream `tts/base.py` + `tts/factory.py`.
-//! Providers ship in this build: OpenAI (tts-1-hd) and Edge TTS (free, no key).
+//! Providers ship in this build: OpenAI (tts-1-hd), Edge TTS (free, no key) and
+//! Doubao / Volcengine (ws binary protocol, returns mp3 directly).
 //! ElevenLabs / Gemini multi-speaker land later.
+
+pub mod doubao;
 
 use crate::config::{ApiKeys, ConversationConfig};
 use async_trait::async_trait;
@@ -40,8 +43,35 @@ pub fn create_provider(
             &conv.text_to_speech.edge.question,
             &conv.text_to_speech.edge.answer,
         ))),
+        "doubao" => {
+            if keys.doubao_app_id.is_empty() || keys.doubao_access_token.is_empty() {
+                return Err(
+                    "豆包 TTS 需要配置 App ID 与 Access Token（设置 → API 密钥）".into(),
+                );
+            }
+            let vc = &conv.text_to_speech.doubao;
+            // resource_id / api_version 为空时回退到默认（大模型 TTS + V1）。
+            let resource_id = if keys.doubao_resource_id.trim().is_empty() {
+                doubao::DEFAULT_RESOURCE_ID.to_string()
+            } else {
+                keys.doubao_resource_id.trim().to_string()
+            };
+            let api_version = if keys.doubao_api_version.trim().is_empty() {
+                doubao::DEFAULT_API_VERSION.to_string()
+            } else {
+                keys.doubao_api_version.trim().to_string()
+            };
+            Ok(Box::new(doubao::DoubaoTts::new(
+                keys.doubao_app_id.clone(),
+                keys.doubao_access_token.clone(),
+                vc.model.clone().unwrap_or_else(|| "volcano_tts".into()),
+                vc.question.clone(),
+                resource_id,
+                api_version,
+            )))
+        }
         other => Err(format!(
-            "TTS provider '{other}' not available in this build (openai/edge supported)"
+            "TTS provider '{other}' not available in this build (openai/edge/doubao supported)"
         )),
     }
 }
