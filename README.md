@@ -51,7 +51,10 @@ flowchart LR
 前置：**Rust** 工具链、**Node 18+**、系统已安装 **ffmpeg**（音频拼接必需；应用启动会自检）。
 
 ```bash
+# 从 GitCode 克隆（国内访问快）
 git clone https://gitcode.com/qq8864/PodcastfyUI.git
+#   或从 GitHub 克隆（两仓内容同步）
+# git clone https://github.com/yangyongzhen/PodcastfyUI.git
 cd PodcastfyUI
 
 npm install          # 首次安装前端依赖
