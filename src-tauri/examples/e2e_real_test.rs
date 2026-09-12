@@ -63,8 +63,13 @@ async fn main() -> Result<(), String> {
         conv.output_language
     );
 
-    let source = "Rust 的所有权系统在编译期消除数据竞争：每个值有唯一所有者，离开作用域即释放；\
-借用分为可变与不可变，可变借用是独占的。Tauri 用 Rust 做桌面后端，前端只能通过命令与事件与它通信。";
+    // 素材可用 EP_SOURCE 覆盖，省得为换个主题重新改代码；默认用项目自身的技术介绍。
+    let source = std::env::var("EP_SOURCE").unwrap_or_else(|_| {
+        "Rust 的所有权系统在编译期消除数据竞争：每个值有唯一所有者，离开作用域即释放；\
+借用分为可变与不可变，可变借用是独占的。Tauri 用 Rust 做桌面后端，前端只能通过命令与事件与它通信。"
+            .to_string()
+    });
+    println!("[cfg] 素材 {} 字符（EP_SOURCE {}）", source.chars().count(), if std::env::var("EP_SOURCE").is_ok() { "已覆盖" } else { "未设置，用默认" });
 
     let work = PathBuf::from("/tmp/e2e-real");
     let _ = std::fs::remove_dir_all(&work);

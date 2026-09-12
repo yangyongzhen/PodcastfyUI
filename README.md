@@ -1,8 +1,10 @@
 # PodcastfyUI
 
-**把网页 / PDF / 一段文本 / 一个主题，变成一段双人对话播客音频。**
+**用纯 Rust 重写 Podcastfy：把网页、PDF 和一段文字，变成一档双人对话播客。**
 
-PodcastfyUI 是 [podcastfy](https://github.com/souzatharsis/podcastfy)（NotebookLM「生成播客」能力的开源复刻）的**桌面图形界面版**：核心引擎用**纯 Rust 重写**，不需要 Python 环境、不下载任何本地 AI 模型——本机只负责内容抽取、对话编排与音频拼接。
+PodcastfyUI 是 [podcastfy](https://github.com/souzatharsis/podcastfy)（NotebookLM「生成播客」能力的开源复刻）的**桌面图形界面版**：核心引擎用**纯 Rust 重写**，不需要 Python 环境、不下载任何本地 AI 模型——本机只负责内容抽取、对话编排与音频拼接。输入也可以是**一个主题**（联网搜索扩展后再成稿）。
+
+📖 **项目介绍博文**：[用纯 Rust 重写 Podcastfy：把网页、PDF 和一段文字，变成一档双人对话播客](https://blog.csdn.net/qq8864/article/details/165128044)
 
 ![PodcastfyUI 首页](docs/screenshots/01-home.png)
 
@@ -88,7 +90,7 @@ npm run tauri build  # 生产构建，产物在 src-tauri/target/release/bundle/
 | `openai` | API key + 音色（+ 模型，默认 `tts-1-hd`） | 端点固定为 `api.openai.com` |
 | `doubao`（火山引擎） | **App ID + Access Token + 集群 cluster + 主持人 1/2 音色** | 参数最多，音质与稳定性好；音色需在火山控制台开通「大模型语音合成」 |
 
-豆包示例：集群填 `volcano_tts`，两个音色分别填两位主持人的 `voice_type`（如 `zh_female_wanwanxiaohe_moon_bigtts`）——**两位主持人建议用不同音色**，否则听不出对话感。
+豆包示例：集群填 `volcano_tts`，两个音色分别填两位主持人的 `voice_type`——已验证可用的一对是 `zh_female_wanwanxiaohe_moon_bigtts`（人 1）+ `zh_male_wennuanahu_moon_bigtts`（人 2）。**两位主持人务必用不同音色**：填成同一个就变成「同一人自问自答」，实测已踩过这个坑。
 
 ### 输出语言
 
@@ -110,10 +112,17 @@ npm run tauri build  # 生产构建，产物在 src-tauri/target/release/bundle/
 - [docs/api.md](docs/api.md) — Tauri 命令 / 事件 API
 - [docs/devlog.md](docs/devlog.md) — 开发日志与踩坑记录
 - [docs/release-readiness.md](docs/release-readiness.md) — 上架就绪度
+- [docs/introducing-podcastfyui.md](docs/introducing-podcastfyui.md) — 项目介绍长文
+
+## 📖 延伸阅读
+
+- [用纯 Rust 重写 Podcastfy：把网页、PDF 和一段文字，变成一档双人对话播客](https://blog.csdn.net/qq8864/article/details/165128044) — CSDN 博文：为什么放弃 Python 版、纯 Rust 引擎怎么落地、踩过哪些坑
 
 ## 📌 状态与路线
 
 MVP 已完成（2026-09-12）：`cargo check` ✅ · `cargo test` ✅ · `svelte-check` 0 错 0 警 ✅ · `vite build` ✅
+
+真实端到端已跑通（2026-09-12，真实三方服务、全程无 mock）：真实 LLM 生成 34 行对话稿 → 豆包 TTS **29/29 行**全部合成成功（人 1 女声 / 人 2 男声）→ ffmpeg 拼接出 **202.5 秒**双人对谈 mp3（24 kHz / 单声道）。
 
 后续：任务持久化 · ElevenLabs / Gemini 多说话人 TTS · 拖拽文件输入 · 应用图标与各平台打包分发（deb / rpm / AppImage → Windows）。
 
