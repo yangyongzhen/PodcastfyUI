@@ -28,5 +28,14 @@ export default defineConfig(() => ({
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
+    // 4. 预转换组件：style 虚拟模块的加载依赖「父模块 transform 时缓存的 CSS」
+    //    （vite-plugin-svelte 的 load-compiled-css 从 meta.svelte.css 取）。
+    //    首个请求若抢在父模块之前到达，加载钩子取不到 CSS 就返回 null，接着
+    //    vite:css 拿 .svelte 原文去跑 postcss，报 "Unknown word"（每次 dev 启动
+    //    必现、刷新即好）。预热父模块即可消除这个启动竞态。
+    warmup: {
+      clientFiles: ["./src/routes/+page.svelte", "./src/routes/**/*.svelte"],
+      ssrFiles: ["./src/routes/+page.svelte", "./src/routes/**/*.svelte"],
+    },
   },
 }));

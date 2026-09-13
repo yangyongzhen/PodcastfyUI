@@ -2,8 +2,9 @@
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import * as api from "../lib/api";
-  import type { ConversationConfig, LlmConfig, SearchConfig, VideoConfig } from "../lib/types";
+  import type { ConversationConfig, LlmConfig, OutputConfig, SearchConfig, VideoConfig } from "../lib/types";
   import { t, LOCALES, getLocale, setLocale, type Locale } from "../lib/i18n.svelte.js";
+  import { toast } from "../lib/ui/feedback.svelte.js";
 
   let keys = $state({ openai: "", anthropic: "", gemini: "", elevenlabs: "", serper: "", exa: "", bocha: "", zhipu: "", qianfan: "", doubao_app_id: "", doubao_access_token: "", doubao_resource_id: "volc.service_type.10029", doubao_api_version: "v1" });
   // 与后端 SearchConfig 默认值对齐：读盘失败时保留这份默认值。
@@ -36,6 +37,10 @@
   let msg = $state("");
   let err = $state("");
   let testing = $state<"llm" | "tts" | "ffmpeg" | "">("");
+  // 输出目录配置：dir 为空串 = 用系统默认目录；与后端 OutputConfig 默认值对齐。
+  let out = $state<OutputConfig>({ dir: "" });
+  let defaultDir = $state("");
+  let outputBusy = $state(false);
 
   async function load() {
     try {
@@ -47,6 +52,8 @@
       ttsModel = conv.text_to_speech.default_tts_model;
       vid = await api.getVideoConfig();
       search = await api.getSearchConfig();
+      out = await api.getOutputConfig();
+      defaultDir = await api.getDefaultOutputDir();
       await refreshFont(vid.font_path);
     } catch (e) {
       err = String(e);
@@ -111,6 +118,19 @@
       err = String(e);
     } finally {
       busy = false;
+    }
+  }
+
+  /** 单独保存输出目录：只影响新任务，不动其它配置。 */
+  async function saveOutput() {
+    outputBusy = true;
+    try {
+      await api.saveOutputConfig(out);
+      toast(t("输出目录已保存"), "ok");
+    } catch (e) {
+      toast(t("保存输出目录失败：{err}", { err: String(e) }), "err");
+    } finally {
+      outputBusy = false;
     }
   }
 
@@ -398,6 +418,22 @@
   <p class="muted">{t("当前中文字体：{path}", { path: fontStatus })}</p>
   <p class="muted">
     {t("视频由 ffmpeg 编码，导出在任务卡片上手动触发，不会随生成自动执行。")}
+  </p>
+
+  <h3>{t("输出目录")}</h3>
+  <div class="form-grid">
+    <label>{t("自定义输出目录")}
+      <input type="text" bind:value={out.dir} placeholder={t("留空则使用系统默认目录")} />
+    </label>
+  </div>
+  <div class="actions">
+    <button class="btn" type="button" onclick={saveOutput} disabled={outputBusy}>
+      {outputBusy ? t("保存中…") : t("保存输出目录")}
+    </button>
+  </div>
+  <p class="muted">{t("系统默认目录：{path}", { path: defaultDir })}</p>
+  <p class="muted">
+    {t("留空则使用系统默认目录（Linux ~/.local/share、Windows %APPDATA%、macOS ~/Library/Application Support，跨平台自动适配）。修改后只对新任务生效，已有任务仍留在原目录。")}
   </p>
 
   {#if msg}<p class="ok">{msg}</p>{/if}

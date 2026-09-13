@@ -1,5 +1,85 @@
 # 开发日志
 
+## 2026-09-13 · 播放器播不出声：WebKitGTK 的媒体管线不认 `asset://` 自定义 scheme
+
+### 现象
+用户实测点播放，音频和视频**都**加载失败：`音频 #4 asset://localhost/%2Froot%2F…%2Fpodcast.mp3`
+（`MediaError #4` = 该来源格式/协议不受支持）。
+
+### 排除法（每条都有证据，不是推测）
+| 假设 | 反证 |
+|---|---|
+| asset 协议 scope 没放行这条路径 | Tauri 自身单测写明 `allow_directory(dir, true)` 后 `dir/inner/folder/anyfile` 必须为 true；`escaped_pattern_with` 拼出的是规范的 `dir/**`（不存在 `dir**` 这种形态）；本机整条路径链无符号链接（`readlink -f` 与索引一致）⇒ 放行判定无辜 |
+| URL 整体百分号编码是 bug | Tauri 2.11.5 的 handler 会 `percent_decode(path[1..])`，`%2F` 正确还原为 `/` |
+| 缺 MP3 解码器 | `libgstmpg123.so` 在、`libmpg123.so.0` 依赖解析正常、playback / typefind / id3demux 齐全 |
+| 缺 H.264 解码器导致音频也挂 | 两种格式同时失败，一个编解码器解释不了 |
+
+### 根因
+WebKitGTK 的**媒体加载器**只认 `file / http(s) / blob / data`，不认应用注册的自定义 scheme：
+`asset://` 能被 `fetch` 正常取到字节（普通资源加载路径支持自定义 scheme），但把同一个 URL 交给
+`<audio>` / `<video>` 的媒体管线，必然报 `#4`（源不受支持）。
+`dangerousUseHttpScheme` / `http://asset.localhost` 是 WebView2（Windows）和 Android 的能力，
+WebKitGTK 没有——在 tauri 2.11.5 的 Rust 源码里搜不到这个开关。
+
+### 修复
+1. `tauri.conf.json` CSP：`connect-src` 增加 `asset:`。原来只放行了 `media-src` / `img-src`，
+   前端去 `fetch` 会被 CSP 拦掉。
+2. `TaskCard.svelte`：播放源改成「`fetch` 取字节 → `Blob` → `URL.createObjectURL`」，
+   交给媒体元素的是 `blob:`（在 `media-src` 里本就放行）；取字节失败则退回直连 URL，
+   并把真实错误（`fetch` 报的 HTTP 码 / 媒体报的 `MediaError` 码）写进播放器下方常驻错误行。
+3. 播放按钮在资源就绪前禁用，`<audio>` 就绪前不带 `src`，不再白触发一次注定失败的加载。
+4. 播放器门槛由 `status === "completed"` 放宽为「有音频就渲染」：任务被归一成 `interrupted`
+   （例如应用重启打断导出）后，产物其实还在，不该连播放入口都看不到。
+
+### 验证
+`svelte-check` 0 errors / 0 warnings；dev 重建 `Finished dev profile`；二进制时间（15:13:35）晚于
+配置改动（15:13:19）⇒ 新 CSP 确实编进去了；日志显示 HMR 已更新 `TaskCard.svelte`。
+**出声与否仍需用户点一次确认**（助手听不到声音，不得代验）。
+
+### 未解：视频预览
+视频除上面这条协议限制外，本机还缺 H.264 解码器（gst 插件目录无 `libgstlibav.so` /
+openh264 / vaapi，`fakevideosink` 也缺），两条障碍叠加。用户决定先只修音频、视频搁置。
+
+## 2026-09-13 · 任务队列持久化：重启不再丢列表，历史产物目录自动恢复
+
+### 背景
+任务表原来只在内存（`QueueManager` 一个 `HashMap`），应用一关列表就空了：上次生成的 mp3 / 转录稿
+明明还在 `tasks/<uuid>/` 里，界面上却找不到，连点播放、打开目录复用都做不到——只能自己进
+`~/.local/share/com.podcastfy.ui/tasks/` 翻。
+
+### 完成
+- **索引落盘**：新增 `task_index.json`（`{app_data_dir}/task_index.json`，载荷 `{version, tasks[]}`，与产物目录
+  `tasks/` 命名不冲突）；`QueueManager::with_store(app_dir)` 取代 `new()`，在 `lib.rs` 的 `setup` 里用
+  `app.path().app_data_dir()` 接线。`start` / `update` / `cancel` / `delete` / `save_transcript` 所有变更点写后即存，
+  采用 `.tmp` → `rename` 原子写（崩溃不会留半截 JSON）；索引缺失、读写或解析失败都只 `warn`，绝不影响任务本身。
+- **两路恢复**（缺一不可）：① 读索引；② 扫描 `tasks/*/` 重建没有索引记录的历史任务。三个产物都没有的空壳
+  目录直接跳过，不在列表里留空卡片；只有转录稿/视频的目录保留为 failed，让「那次没跑完」看得见。
+- **标题回落**：新式可读目录名 `日期-主题-短id` 取中间那段主题；纯 uuid 的旧目录取转录稿首句（跳过
+  `PODCASTIFY` 与 tagline 两行表头，截断 42 字），都没有则给「历史任务 <id前8位>」。实测历史任务
+  `90a5b181` 恢复出的标题是「欢迎回到 PODCASTIFY——你的私人生成式AI播客！我是今天的主持人，今天我们…」。
+- **状态归一**：进程退出后 `pending/extracting/generating/synthesizing/muxing/exporting` 不可能再推进，
+  载入时统一改 failed + `stage = "interrupted"` 并写明原因，避免界面永远转圈。
+- **删除语义补齐**：原来 `delete` 只从内存摘掉、产物留在盘上；加了扫描恢复后会「删了又复活」，
+  现在连带清产物（只删本任务记录过的已知文件与 `parts/`，不做整目录递归，索引被改坏也不会误删）。
+
+### 验证（无头 + 实机）
+- `cargo check` 0 errors（限并行 2 + 关 debuginfo）。
+- `cargo test --lib`：**24 passed / 0 failed**（原 20 + 新增 4：目录恢复、uuid 目录标题回落、中断归一、删除不复活）。
+- 实机重启 dev，日志两次打印恢复行：首次 `restored 1 task(s) (1 from workspace, 0 interrupted)`——走扫描，
+  磁盘上只有产物的历史任务 `90a5b181` 被重建；二次 `restored 1 task(s) (0 from workspace, 0 interrupted)`——走索引，
+  证明索引往返有效。`task_index.json` 874 字节 / 含 1 条任务，音频、转录稿、视频三个路径齐全。
+- 环境提醒：本机内存仅 1.9G，dev 会话必须带 `CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0`，且用 `setsid`
+  派生，否则会随父 shell 一起死掉（本轮踩过一次：应用、vite、cargo 全没了）。
+
+## 2026-09-12 · 多平台产物目录 + 任务页三处修复
+
+- 任务页三修：① 开 `assetProtocol`（scope `$APPDATA/**`），播放失败弹提示；② `RUNNING_STATUS` 补 `"exporting"`，视频预览改点击加载（`preload="none"`）；③ 两个「打开」命令改为尽力打开 + 始终回传绝对路径。
+- 新增「输出目录」设置项（`output.json` / `OutputConfig`）：默认仍走系统应用数据目录，可改到桌面/文档；一旦自定义，`allow_asset_dir` 同步放行 asset 协议 scope，新目录下的音频/视频照样能播。
+- 任务目录改可读前缀 `日期-主题-id前8位`：`slugify` 保留中文、剔符号与 emoji、限长、规避 Windows 保留名；`export_video` 由 `Task.audio_path` 反推任务目录，与 `execute` 口径一致。
+- 任务成功后清理 `parts/` 中间产物（成品音频/视频/封面保留）。
+- 新增 6 个命名逻辑单测：`cargo test --lib` 20 passed / 0 failed；`cargo run --example smoke_test` 4/4 阶段绿。
+- 环境记录：本机内存仅 1.9G，dev 全量构建若并行 5 个 rustc 会耗尽内存卡死（cargo 进 D 状态）；改 `CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0`（test profile 同步关 debuginfo）后可正常构建。
+
 ## 2026-09-12 · 主题搜索兜底链：Exa 托管 MCP 免密钥可用（国内可达）
 
 ### 背景

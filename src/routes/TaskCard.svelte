@@ -162,7 +162,10 @@
 
   async function openAudio() {
     try {
-      await api.openAudioFile(task.id);
+      // 无桌面环境（没有文件管理器 / 没有 mime handler）时 xdg-open 会静默失败，
+      // 所以后端始终回传绝对路径，这里无论如何都告诉用户文件在哪。
+      const path = await api.openAudioFile(task.id);
+      toast(t("文件位置：{path}", { path }));
     } catch (e) {
       toast(String(e), "err");
     }
@@ -170,7 +173,57 @@
 
   const audioUrl = $derived(task.audio_path ? api.fileToAssetUrl(task.audio_path) : null);
 
+  /**
+   * 媒体加载失败时给出可定位的信息：MediaError 码 + 浏览器原文 + 实际 URL。
+   * 之前写死「请检查文件是否还在」，会把 asset 协议/解码这类问题引向「文件丢了」的错误方向。
+   */
+  function mediaErrText(label: string, el: HTMLAudioElement | null = audioEl): string {
+    const err = el?.error;
+    const code = err?.code ?? 0;
+    const detail = (err?.message ?? "").trim();
+    const parts = [`${label} #${code}`, detail, audioUrl ?? ""].filter(Boolean);
+    return t("音频加载失败：{err}", { err: parts.join(" · ") });
+  }
+
+  /**
+   * WebKitGTK 的媒体加载器只认 file/http(s)/blob/data，不认自定义 scheme：`asset://` 能被 fetch 取到字节，
+   * 但交给 <audio>/<video> 必然报 MediaError #4（源不受支持）。所以先取成 Blob 再用 object URL 播放。
+   */
+  async function toPlayableUrl(src: string): Promise<string> {
+    try {
+      const res = await fetch(src);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return URL.createObjectURL(await res.blob());
+    } catch (e) {
+      // 退回直连 URL，让媒体元素把真实错误也报出来，别把线索吞掉。
+      mediaErr = t("音频加载失败：{err}", { err: `fetch ${src} · ${(e as Error)?.message ?? e}` });
+      return src;
+    }
+  }
+
+  // 可播放地址（object URL）。null = 尚未就绪，此时媒体元素没有 src，不会白白触发一次必然失败的加载。
+  let playUrl = $state<string | null>(null);
+  $effect(() => {
+    const src = audioUrl;
+    if (!src) {
+      playUrl = null;
+      return;
+    }
+    let alive = true;
+    void toPlayableUrl(src).then((u) => {
+      if (alive) playUrl = u;
+    });
+    return () => {
+      alive = false;
+    };
+  });
+
   // ---- 视频导出（可选第五阶段：L1 封面 / L2 波形） --------------------
+  // 预览默认不加载：几十 MB 的视频资产在无 GPU 的 WebKit 里自动加载会把渲染进程拖死（整页空白）。
+  // 播放失败的详细信息常驻显示：toast 只活 5 秒，而 MediaError 原文 + asset URL 很长，
+  // 用户来不及看清就消失，排查只能靠猜。
+  let mediaErr = $state("");
+  let showVideo = $state(false);
   let exporting = $state(false);
   const videoUrl = $derived(task.video_path ? api.fileToAssetUrl(task.video_path) : null);
 
@@ -191,7 +244,8 @@
 
   async function openVideo() {
     try {
-      await api.openVideoFile(task.id);
+      const path = await api.openVideoFile(task.id);
+      toast(t("文件位置：{path}", { path }));
     } catch (e) {
       toast(String(e), "err");
     }
@@ -207,9 +261,16 @@
   const rate = $derived(rates[rateIdx]);
 
   function togglePlay() {
-    if (!audioEl) return;
-    if (audioEl.paused) void audioEl.play();
-    else audioEl.pause();
+    if (!audioEl) {
+      toast(t("播放器还没就绪，请稍后再试"), "err");
+      return;
+    }
+    if (audioEl.paused) {
+      // 以前是 void play()：加载失败时完全静默，用户只看到「点了没反应」。
+      audioEl.play().catch((e) => toast(t("音频加载失败：{err}", { err: String(e) }), "err"));
+    } else {
+      audioEl.pause();
+    }
   }
 
   function seekBy(sec: number) {
@@ -234,6 +295,7 @@
     const el = e.currentTarget as HTMLAudioElement;
     duration = el.duration;
     el.playbackRate = rates[rateIdx];
+    mediaErr = "";
   }
 
   function cycleRate() {
@@ -284,25 +346,33 @@
       <button class="btn" onclick={cancel}>{t("取消")}</button>
     </div>
   {:else}
-    {#if task.status === "completed"}
+    {#if task.status === "completed" || task.audio_path}
       {#if audioUrl}
         <div class="player">
           <audio
             class="audio"
             bind:this={audioEl}
-            src={audioUrl}
+            src={playUrl}
             onplay={() => (playing = true)}
             onpause={() => (playing = false)}
+            onerror={() => {
+              mediaErr = mediaErrText("音频");
+              toast(mediaErr, "err");
+            }}
             onended={() => (playing = false)}
             ontimeupdate={onTimeUpdate}
             onloadedmetadata={onLoaded}
           ></audio>
+          {#if mediaErr}
+            <p class="stage" role="status">{mediaErr}</p>
+          {/if}
           <div class="controls">
             <button
               class="ctl"
               type="button"
               aria-label={playing ? t("暂停") : t("播放")}
               onclick={togglePlay}
+              disabled={!playUrl}
             >
               {playing ? "⏸" : "▶"}
             </button>
@@ -347,11 +417,18 @@
         </div>
       {/if}
 
-      {#if videoUrl}
+      {#if videoUrl && showVideo}
         <div class="player">
           <!-- 成片没有独立字幕轨：标题/副标题已烧进画面，故显式忽略该 a11y 提示 -->
           <!-- svelte-ignore a11y_media_has_caption -->
-          <video class="video" src={videoUrl} controls preload="metadata"></video>
+          <!-- preload="none"：几十 MB 成片不自动加载，避免无 GPU 环境下渲染进程被拖死 -->
+          <video
+            class="video"
+            src={videoUrl}
+            controls
+            preload="none"
+            onerror={() => toast(t("视频预览加载失败，可用「打开视频文件」查看"), "err")}
+          ></video>
         </div>
       {/if}
       {#if task.video_error}
@@ -367,6 +444,9 @@
           {exporting ? t("导出中…") : t("导出视频")}
         </button>
         {#if task.video_path}
+          <button class="btn" onclick={() => (showVideo = !showVideo)}>
+            {showVideo ? t("收起视频预览") : t("预览视频")}
+          </button>
           <button class="btn" onclick={openVideo}>{t("打开视频文件")}</button>
         {/if}
         <button class="btn" onclick={resynthesize} disabled={resynthesizing}>

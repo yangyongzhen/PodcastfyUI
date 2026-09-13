@@ -162,3 +162,27 @@ VideoConfig {
 ```
 
 导出的 mp4 同样用 `convertFileSrc` 在应用内预览播放（与音频一致）。
+
+## 任务表持久化与重启恢复
+
+| 项 | 说明 |
+|---|---|
+| 索引文件 | `{app_data_dir}/task_index.json`（`{version, tasks[]}`）；与产物目录 `tasks/` 分开，命名不冲突 |
+| 落盘时机 | `start` / `update`（含进度推进）/ `cancel` / `delete` / `save_transcript` 之后立即原子写（`.tmp` → `rename`） |
+| 失败策略 | 索引读写与解析失败只记 `warn` 日志，绝不影响任务本身；文件不存在照常启动 |
+| 恢复来源 | ① 索引；② 扫描 `tasks/*/` 重建历史任务（有 `podcast.mp3` → completed，只有转录稿/视频 → failed） |
+| 标题来源 | 可读目录名 `日期-主题-短id` 的中间段；纯 uuid 的旧目录取转录稿首句（截断 42 字） |
+| 状态归一 | `pending` / `extracting` / `generating` / `synthesizing` / `muxing` / `exporting` 载入时统一改 failed + `stage = "interrupted"` |
+| 空壳目录 | 三个产物都没有的目录不算任务，直接跳过，列表里不会出现空卡片 |
+| 删除语义 | `delete_task` 连产物一起删（音频/转录稿/视频/`parts/`），避免重启时被扫描复活 |
+| 恢复日志 | 启动打印 `task index: restored N task(s) (M from workspace, K interrupted)`，供无头核对 |
+
+## 输出目录
+
+| 命令 | 说明 |
+| --- | --- |
+| `get_output_config` | 读取产物目录配置（`output_dir` 为空 = 用系统应用数据目录） |
+| `save_output_config` | 保存并即时生效；自定义目录会经 `allow_asset_dir` 放行给 asset 协议 |
+| `get_default_output_dir` | 返回系统默认根目录（设置页「恢复默认」用） |
+
+产物根目录下每个任务一个文件夹，名为 `日期-主题-id前8位`（例：`2026-09-12-我的播客-90a5b181`）；任务成功后清理 `parts/` 中间产物，成品音频/视频/封面保留。

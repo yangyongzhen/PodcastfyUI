@@ -88,6 +88,12 @@ export interface SearchConfig {
   degrade_without_search: boolean;
 }
 
+/** 输出目录配置（output.json）：所有产物的落盘根目录。 */
+export interface OutputConfig {
+  /** 输出根目录；空串 = 用系统默认目录（AppData）。 */
+  dir: string;
+}
+
 export interface VoiceConfig {
   question: string;
   answer: string;

@@ -18,6 +18,7 @@ pub(crate) struct Settings {
     pub conversation: ConversationConfig,
     pub video: VideoConfig,
     pub search: SearchConfig,
+    pub output: OutputConfig,
 }
 
 pub(crate) fn load_settings(app: &AppHandle) -> Settings {
@@ -43,6 +44,15 @@ pub(crate) fn load_settings(app: &AppHandle) -> Settings {
             .as_ref()
             .ok()
             .and_then(|d| read_json::<SearchConfig>(&d.join("search.json")))
+            .map(|mut c| {
+                c.normalize();
+                c
+            })
+            .unwrap_or_default(),
+        output: dir
+            .as_ref()
+            .ok()
+            .and_then(|d| read_json::<OutputConfig>(&d.join("output.json")))
             .map(|mut c| {
                 c.normalize();
                 c
@@ -227,6 +237,25 @@ impl SearchConfig {
             _ => "auto".into(),
         };
         self.num_results = self.num_results.clamp(1, 20);
+    }
+}
+
+/// 产物输出（`output.json`）：成品音频/视频落在哪个根目录下。
+///
+/// 留空 = 系统默认 AppData（Linux `~/.local/share/<id>`、Windows `%APPDATA%\<id>`、
+/// macOS `~/Library/Application Support/<id>`）。填了就用用户指定目录；启动与保存时会
+/// 同步放行 asset 协议 scope，否则自定义目录下的音频/视频在应用内无法预览。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct OutputConfig {
+    /// 输出根目录；空串 = 用系统 AppData。
+    pub dir: String,
+}
+
+impl OutputConfig {
+    /// 归一化：去掉首尾空白与引号（用户从文件管理器复制路径时常带引号，Windows 反斜杠原样保留）。
+    pub fn normalize(&mut self) {
+        self.dir = self.dir.trim().trim_matches('"').trim().to_string();
     }
 }
 
@@ -483,6 +512,77 @@ pub fn get_search_config(app: AppHandle) -> Result<SearchConfig, String> {
 pub fn save_search_config(app: AppHandle, mut config: SearchConfig) -> Result<(), String> {
     config.normalize();
     let p = search_path(&app)?;
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let s = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    std::fs::write(&p, s).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// 产物输出目录（`output.json`）
+// ---------------------------------------------------------------------------
+
+fn output_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app_dir(app)?.join("output.json"))
+}
+
+fn read_output_config(app: &AppHandle) -> Result<OutputConfig, String> {
+    let p = output_path(app)?;
+    let mut cfg: OutputConfig = if !p.exists() {
+        OutputConfig::default()
+    } else {
+        let s = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+        serde_json::from_str(&s).map_err(|e| e.to_string())?
+    };
+    cfg.normalize();
+    Ok(cfg)
+}
+
+/// 产物根目录：配置了就用配置目录（并确保存在），否则回落到系统 AppData。
+///
+/// 目录是跨平台最容易踩坑的地方（Windows `%APPDATA%` 是隐藏目录、可能落在别的盘符、
+/// 中文路径），所以规则只有一条「空 = AppData / 非空 = 用户目录」，且不可写时明确报错，
+/// 不做静默回落——否则用户会以为文件写进了自己指定的目录。
+pub fn output_root(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let cfg = read_output_config(app)?;
+    if cfg.dir.is_empty() {
+        return app_dir(app);
+    }
+    let p = std::path::PathBuf::from(&cfg.dir);
+    std::fs::create_dir_all(&p).map_err(|e| format!("无法创建输出目录 {}：{e}", p.display()))?;
+    Ok(p)
+}
+
+/// 默认产物根目录（设置页要把它显示给用户看）。
+pub fn default_output_root(app: &AppHandle) -> String {
+    app_dir(app)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn get_output_config(app: AppHandle) -> Result<OutputConfig, String> {
+    read_output_config(&app)
+}
+
+#[tauri::command]
+pub fn get_default_output_dir(app: AppHandle) -> Result<String, String> {
+    Ok(default_output_root(&app))
+}
+
+#[tauri::command]
+pub fn save_output_config(app: AppHandle, mut config: OutputConfig) -> Result<(), String> {
+    config.normalize();
+    // 填了就先建出来：宁可在保存时报错，也别等任务跑完才发现写不进去。
+    if !config.dir.is_empty() {
+        let p = std::path::PathBuf::from(&config.dir);
+        std::fs::create_dir_all(&p)
+            .map_err(|e| format!("无法创建输出目录 {}：{e}", p.display()))?;
+    }
+    // 自定义目录必须同步放行 asset 协议，否则应用内音频/视频预览会被协议拒绝。
+    crate::allow_asset_dir(&app, &config.dir);
+    let p = output_path(&app)?;
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }

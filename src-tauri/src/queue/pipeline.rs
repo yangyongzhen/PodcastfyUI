@@ -44,6 +44,157 @@ pub(super) async fn run(
     }
 }
 
+/// 目录名里的日期前缀（`YYYY-MM-DD`）。
+///
+/// 不为此引入日期库：前缀只用于排序辨识，取 UTC 日期即可（东八区凌晨可能差一天，不影响使用）。
+fn date_prefix() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = secs.div_euclid(86_400);
+    // Howard Hinnant 的 civil_from_days：把「1970-01-01 起的天数」换算成年月日。
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// 把主题文本转成可安全用于三平台文件名的片段：保留中英文数字，其余折叠成 `-`，并限长。
+///
+/// 目录名会带上中文（不做音译），因此按「字符是否安全」过滤，而不是按 ASCII 白名单裁剪。
+fn slugify(input: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    let mut pending_dash = false;
+    for ch in input.chars() {
+        if out.chars().count() >= max_chars {
+            break;
+        }
+        if ch.is_alphanumeric() || ch == '-' || ch == '_' {
+            if pending_dash && !out.is_empty() {
+                out.push('-');
+            }
+            pending_dash = false;
+            out.push(ch);
+        } else {
+            pending_dash = true;
+        }
+    }
+    let s = out.trim_matches('-').trim_end_matches('.').to_string();
+    // Windows 保留设备名不能作为目录名。
+    let upper = s.to_ascii_uppercase();
+    if matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "COM1" | "LPT1"
+    ) {
+        return format!("{s}-dir");
+    }
+    s
+}
+
+/// 拼任务目录名：`<日期>-<可读标题>-<id 前 8 位>`；没有可读来源则退化为 `日期+id`。
+///
+/// 标题优先取 topic（主题搜索用），其次原文 text，最后取首个 URL 的主机部分。
+/// 老任务目录是按 uuid 建的，仍通过任务里存的 audio_path 定位，不需要迁移。
+fn task_dir_name(id: &str, input: &TaskInput) -> String {
+    let short: String = id.chars().take(8).collect();
+    let mut slug = slugify(&input.topic, 32);
+    if slug.is_empty() {
+        slug = slugify(&input.text, 32);
+    }
+    if slug.is_empty() {
+        if let Some(u) = input.urls.first() {
+            let hostish = u
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+            slug = slugify(hostish, 24);
+        }
+    }
+    if slug.is_empty() {
+        format!("{}-{}", date_prefix(), short)
+    } else {
+        format!("{}-{}-{}", date_prefix(), slug, short)
+    }
+}
+
+/// 任务成功后清掉 `parts/` 中间产物：成品已经拼好，留着只是白占磁盘。
+///
+/// 失败路径故意不调用——那是排查问题的现场，清掉就再也复现不了。
+fn cleanup_parts(task_dir: &std::path::Path) {
+    let parts = task_dir.join("parts");
+    if !parts.exists() {
+        return;
+    }
+    match std::fs::remove_dir_all(&parts) {
+        Ok(_) => tracing::info!("cleaned intermediate parts at {}", parts.display()),
+        Err(e) => tracing::warn!("clean parts failed at {}: {e}", parts.display()),
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    fn input(topic: &str, text: &str, urls: &[&str]) -> TaskInput {
+        TaskInput {
+            topic: topic.into(),
+            text: text.into(),
+            urls: urls.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn slug_keeps_cjk_and_drops_symbols() {
+        assert_eq!(slugify("AI 播客：如何入门？", 32), "AI-播客-如何入门");
+        assert_eq!(slugify("  ??//  ", 32), "");
+    }
+
+    #[test]
+    fn slug_is_length_capped() {
+        assert_eq!(slugify(&"中".repeat(100), 8).chars().count(), 8);
+    }
+
+    #[test]
+    fn slug_avoids_windows_reserved_names() {
+        assert_eq!(slugify("CON", 32), "CON-dir");
+    }
+
+    #[test]
+    fn dir_name_prefers_topic_then_text_then_url() {
+        let id = "90a5b181-16be-416f-bed9-b0a4ffbbfee0";
+        assert!(task_dir_name(id, &input("我的播客", "", &[])).ends_with("-我的播客-90a5b181"));
+        assert!(task_dir_name(id, &input("", "正文标题", &[])).ends_with("-正文标题-90a5b181"));
+        assert!(
+            task_dir_name(id, &input("", "", &["https://example.com/a/b"]))
+                .ends_with("-example-com-a-b-90a5b181")
+        );
+    }
+
+    #[test]
+    fn dir_name_falls_back_to_date_and_id() {
+        assert_eq!(
+            task_dir_name("90a5b181-x", &input("", "", &[])),
+            format!("{}-90a5b181", date_prefix())
+        );
+    }
+
+    #[test]
+    fn date_prefix_is_iso_shaped() {
+        let d = date_prefix();
+        assert_eq!(d.len(), 10, "{d}");
+        assert_eq!(&d[4..5], "-");
+        assert_eq!(&d[7..8], "-");
+    }
+}
+
 async fn execute(
     queue: &QueueManager,
     app: &AppHandle,
@@ -53,14 +204,13 @@ async fn execute(
     let settings = load_settings(app);
     let conv = settings.conversation.clone();
 
-    let task_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join(WORKSPACE)
-        .join(id);
+    // 产物目录：<输出目录（默认 AppData）>/tasks/<日期>-<可读标题>-<id 前 8 位>。
+    // 可读前缀是为了让用户在自己的文件管理器里认出目录对应哪个任务（保留中文，不音译），
+    // 尾部 id 片段保证唯一；用户可在设置里把输出目录改到桌面/文档等出口。
+    let root = crate::config::output_root(app)?;
+    let task_dir = root.join(WORKSPACE).join(task_dir_name(id, &input));
     let _ = tokio::fs::create_dir_all(&task_dir).await;
-    tracing::info!("task {id}: workspace ready");
+    tracing::info!("task {id}: workspace ready at {}", task_dir.display());
     let transcript_path = task_dir.join("transcript.txt");
     let audio_path = task_dir.join("podcast.mp3");
 
@@ -329,6 +479,7 @@ async fn execute(
         t.stage = "done".into();
         t.audio_path = Some(audio_path.to_string_lossy().to_string());
     });
+    cleanup_parts(&task_dir);
     Ok(())
 }
 
@@ -393,6 +544,7 @@ pub async fn synthesize_and_stitch(
         t.progress = 100;
         t.audio_path = Some(audio_path.to_string_lossy().to_string());
     });
+    cleanup_parts(&task_dir);
     Ok(())
 }
 
@@ -418,12 +570,20 @@ pub async fn export_video(queue: &QueueManager, app: &AppHandle, id: &str) -> Re
 
     let settings = load_settings(app);
     let cfg = settings.video.clone();
-    let task_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join(WORKSPACE)
-        .join(id);
+    // 视频必须落在音频旁边：老任务目录是 uuid、新任务带可读前缀，只有按任务已存的
+    // audio_path 反推才能两者都命中；拿不到才退回按命名规则重算（例如音频从未合成成功）。
+    let task_dir = match task
+        .audio_path
+        .as_ref()
+        .and_then(|a| std::path::Path::new(a).parent().map(|p| p.to_path_buf()))
+    {
+        Some(d) => d,
+        None => {
+            crate::config::output_root(app)?
+                .join(WORKSPACE)
+                .join(task_dir_name(id, &task.input))
+        }
+    };
     let _ = tokio::fs::create_dir_all(&task_dir).await;
     let out = crate::video::output_path(&task_dir, &cfg);
 

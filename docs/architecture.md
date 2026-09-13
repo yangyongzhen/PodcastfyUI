@@ -32,6 +32,8 @@
    - `llm.json`：LLM provider/model/base_url/temperature
    - `conversation.yaml`：播客人设 + TTS 音色（字段对齐上游 `conversation_config.yaml`）
 4. **产物目录**：`{app_data_dir}/tasks/{task_id}/` 下放 `transcript.txt`、`podcast.mp3`、`parts/`（逐句音频）。
+5. **任务表持久化**：`{app_data_dir}/task_index.json` 保存任务列表（`{version, tasks[]}`），所有变更点写后即存
+   （先写 `.tmp` 再 `rename`）；启动时「读索引 + 扫描 `tasks/*/`」两路合一恢复，历史任务也能回到列表里。
 
 ## 2. 生成流水线（pipeline.rs）
 
@@ -79,7 +81,7 @@
 src-tauri/src/
   lib.rs               # run() / 命令注册
   error.rs             # AppError
-  config/mod.rs        # ApiKeys / LlmConfig / ConversationConfig + load_settings
+  config/mod.rs        # ApiKeys / LlmConfig / ConversationConfig / OutputConfig + load_settings
   extractor/mod.rs     # Extractor: extract_url/webpage/youtube/pdf, search_topic
   generator/mod.rs     # Generator + Provider + prompt 模板 + split_chunks
   tts/mod.rs           # TtsProvider trait + OpenAiTts + EdgeTts
@@ -94,3 +96,17 @@ src/
   routes/TaskCard.svelte
   routes/Settings.svelte
 ```
+
+### 运行期产物目录
+
+- 根目录默认取系统应用数据目录（Linux `~/.local/share/com.podcastfy.ui/`、Windows `%APPDATA%\com.podcastfy.ui\`），可在设置页「输出目录」改写（持久化到 `output.json` / `OutputConfig`）。
+- 任务目录名为可读前缀 `日期-主题-id前8位`（例：`2026-09-12-我的播客-90a5b181`），中文保留、符号剔除；`parts/` 中间产物在任务成功后清理，成品音频/视频/封面保留。
+- 自定义输出目录后，asset 协议 scope 由 `allow_asset_dir` 动态放行。
+- **但 `asset://` 不能直接当媒体源**：WebKitGTK 的媒体加载器只认 `file / http(s) / blob / data`，
+  把 `asset://` URL 交给 `<audio>` / `<video>` 会稳定报 `MediaError #4`（协议放行、URL 编码、
+  解码器三条都已排除）。因此媒体不要直接走 `convertFileSrc`，前端先 `fetch` 成 `Blob` 再
+  `URL.createObjectURL` 播放：`blob:` 已在 CSP `media-src` 放行，`connect-src` 另需放行 `asset:`。
+  `http://asset.localhost`（`dangerousUseHttpScheme`）只对 WebView2 / Android 有效，WebKitGTK 无此能力。
+  图片预览不受影响，仍可直接用 `convertFileSrc`。
+- 重启恢复：列表来自 `task_index.json` ∪ `tasks/*/` 目录扫描（后者覆盖本改动之前的历史任务；标题取可读目录名里的主题，纯 uuid 的旧目录回落到转录稿首句）；进程退出时还在进行中的状态载入时归一为 failed / `interrupted`，不会永远转圈。
+- 删除任务会连带清掉它的产物（只删本任务记录过的已知文件与 `parts/`，不做整目录递归），否则下次启动扫描会把「已删除」的任务找回来。

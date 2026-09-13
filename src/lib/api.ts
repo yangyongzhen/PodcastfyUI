@@ -7,6 +7,7 @@ import type {
   ApiKeys,
   ConversationConfig,
   LlmConfig,
+  OutputConfig,
   SearchConfig,
   Task,
   TaskInput,
@@ -45,7 +46,8 @@ export async function saveTranscript(id: string, content: string): Promise<void>
   return invoke("save_transcript", { id, content });
 }
 
-export async function openAudioFile(id: string): Promise<void> {
+/** 打开音频；返回绝对路径（无桌面环境时 xdg-open 会静默失败，前端需自己兜底展示）。 */
+export async function openAudioFile(id: string): Promise<string> {
   return invoke("open_audio_file", { id });
 }
 
@@ -91,12 +93,25 @@ export async function saveSearchConfig(config: SearchConfig): Promise<void> {
   return invoke("save_search_config", { config });
 }
 
+export async function getOutputConfig(): Promise<OutputConfig> {
+  return invoke("get_output_config");
+}
+
+export async function saveOutputConfig(config: OutputConfig): Promise<void> {
+  return invoke("save_output_config", { config });
+}
+
+export async function getDefaultOutputDir(): Promise<string> {
+  return invoke("get_default_output_dir");
+}
+
 /** 导出视频（可选第五阶段）。失败时后端仍保住音频产物，错误只在 video_error 上。 */
 export async function exportVideo(id: string): Promise<Task> {
   return invoke("export_video_task", { id });
 }
 
-export async function openVideoFile(id: string): Promise<void> {
+/** 打开视频；返回绝对路径，理由同 openAudioFile。 */
+export async function openVideoFile(id: string): Promise<string> {
   return invoke("open_video_file", { id });
 }
 
@@ -119,7 +134,17 @@ export function onTaskUpdate(
   return listen<Task>("task-update", (e) => cb(e.payload));
 }
 
-/** Turn a local file path into a playable asset URL. */
+/**
+ * Turn a local file path into a playable asset URL.
+ * 路径异常时返回空串：`convertFileSrc` 会抛错，而调用点在 `$derived` 里，
+ * 一旦抛出去整个页面都会被带走（白屏）。
+ */
 export function fileToAssetUrl(path: string): string {
-  return convertFileSrc(path);
+  if (!path || typeof path !== "string") return "";
+  try {
+    return convertFileSrc(path);
+  } catch (e) {
+    console.error("convertFileSrc failed", path, e);
+    return "";
+  }
 }

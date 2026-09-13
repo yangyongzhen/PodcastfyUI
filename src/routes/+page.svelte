@@ -83,7 +83,7 @@
     if (view !== "settings") checkSetup();
   });
 
-  const RUNNING_STATUS = ["pending", "extracting", "generating", "synthesizing", "muxing"];
+  const RUNNING_STATUS = ["pending", "extracting", "generating", "synthesizing", "muxing", "exporting"];
   const FINISHED_STATUS = ["completed", "failed", "cancelled"];
 
   type Filter = "all" | "running" | "completed" | "failed";

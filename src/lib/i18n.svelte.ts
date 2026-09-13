@@ -148,6 +148,14 @@ const EN: Record<string, string> = {
   "智谱密钥（可空）": "Zhipu API key (optional)",
   "千帆密钥（可空）": "Qianfan API key (optional)",
   "不填则跳过该后端": "Leave blank to skip this backend",
+  "播放器还没就绪，请稍后再试": "Player is not ready yet, try again in a second",
+  "音频加载失败：{err}": "Audio failed to load: {err}",
+  "音频加载失败，请检查文件是否还在": "Audio failed to load — check that the file still exists",
+  "文件位置：{path}": "File location: {path}",
+  "预览视频": "Preview video",
+  "收起视频预览": "Hide video preview",
+  "视频预览加载失败，可用「打开视频文件」查看":
+    'Video preview failed to load — use "Open video file" instead',
   "LLM（转录稿生成）": "LLM (transcript generation)",
   "openai（兼容任意 OpenAI 接口）": "openai (any OpenAI-compatible endpoint)",
   "ollama（本地）": "ollama (local)",
@@ -199,6 +207,15 @@ const EN: Record<string, string> = {
   "测试 FFmpeg": "Test FFmpeg",
   "走真实请求路径，仅消耗一次极小额度":
     "Uses the real request path; consumes one tiny call",
+  输出目录: "Output directory",
+  自定义输出目录: "Custom output directory",
+  留空则使用系统默认目录: "Leave empty to use the system default directory",
+  保存输出目录: "Save output directory",
+  输出目录已保存: "Output directory saved",
+  "保存输出目录失败：{err}": "Failed to save output directory: {err}",
+  "系统默认目录：{path}": "System default directory: {path}",
+  "留空则使用系统默认目录（Linux ~/.local/share、Windows %APPDATA%、macOS ~/Library/Application Support，跨平台自动适配）。修改后只对新任务生效，已有任务仍留在原目录。":
+    "Leave empty to use the system default directory (Linux ~/.local/share, Windows %APPDATA%, macOS ~/Library/Application Support — adapted automatically per platform). Changes apply only to new tasks; existing tasks stay in their original directory.",
 
   // TaskCard.svelte
   "排队中": "Queued",

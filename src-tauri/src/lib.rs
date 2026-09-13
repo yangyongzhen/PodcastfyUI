@@ -10,6 +10,7 @@ pub mod video;
 
 use queue::QueueManager;
 use std::sync::Arc;
+use tauri::Manager;
 
 #[tauri::command]
 fn app_info() -> serde_json::Value {
@@ -17,6 +18,23 @@ fn app_info() -> serde_json::Value {
         "name": env!("CARGO_PKG_NAME"),
         "version": env!("CARGO_PKG_VERSION"),
     })
+}
+
+/// 放行 asset 协议读取某个目录（空串 = 放行默认的 AppData 根）。
+///
+/// 自定义输出目录一旦不在 AppData 下，`convertFileSrc` 生成的地会被协议拒绝，
+/// 用户看到的就是「点播放/看视频没反应」；所以保存设置时和启动时都要同步放行。
+pub fn allow_asset_dir(app: &tauri::AppHandle, dir: &str) {
+    let target = if dir.trim().is_empty() {
+        app.path().app_data_dir().ok()
+    } else {
+        Some(std::path::PathBuf::from(dir.trim()))
+    };
+    if let Some(p) = target {
+        if let Err(e) = app.asset_protocol_scope().allow_directory(&p, true) {
+            tracing::warn!("allow asset dir {} failed: {e}", p.display());
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -28,12 +46,25 @@ pub fn run() {
         )
         .init();
 
-    let queue = Arc::new(QueueManager::new());
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(Arc::clone(&queue))
+        .setup(|app| {
+            // 任务表持久化：索引和产物都在 AppData 下，启动时恢复上次的任务列表。
+            match app.path().app_data_dir() {
+                Ok(dir) => {
+                    app.manage(Arc::new(QueueManager::with_store(&dir)));
+                }
+                Err(e) => {
+                    tracing::warn!("app data dir unavailable, task list will not persist: {e}");
+                    app.manage(Arc::new(QueueManager::new()));
+                }
+            }
+            // 启动就放行已保存的自定义输出目录，否则本次运行里预览会失效。
+            let dir = config::load_settings(app.handle()).output.dir.clone();
+            allow_asset_dir(app.handle(), &dir);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             config::get_api_keys,
@@ -46,6 +77,9 @@ pub fn run() {
             config::save_video_config,
             config::get_search_config,
             config::save_search_config,
+            config::get_output_config,
+            config::save_output_config,
+            config::get_default_output_dir,
             video::video_font_status,
             queue::export_video_task,
             queue::open_video_file,
