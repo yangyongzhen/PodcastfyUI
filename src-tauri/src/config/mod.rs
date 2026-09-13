@@ -17,6 +17,7 @@ pub(crate) struct Settings {
     pub llm: LlmConfig,
     pub conversation: ConversationConfig,
     pub video: VideoConfig,
+    pub search: SearchConfig,
 }
 
 pub(crate) fn load_settings(app: &AppHandle) -> Settings {
@@ -36,6 +37,16 @@ pub(crate) fn load_settings(app: &AppHandle) -> Settings {
             .as_ref()
             .ok()
             .and_then(|d| read_json(&d.join("video.json")))
+            .unwrap_or_default(),
+        // 读时归一化：手工改过的 search.json 也不能让管道拿到非法 provider。
+        search: dir
+            .as_ref()
+            .ok()
+            .and_then(|d| read_json::<SearchConfig>(&d.join("search.json")))
+            .map(|mut c| {
+                c.normalize();
+                c
+            })
             .unwrap_or_default(),
     }
 }
@@ -62,6 +73,14 @@ pub struct ApiKeys {
     pub gemini: String,
     pub elevenlabs: String,
     pub serper: String,
+    /// Exa（托管 MCP `https://mcp.exa.ai/mcp`）：可空——无 key 也能搜，填了提高配额。
+    pub exa: String,
+    /// 博查 Web Search（api.bochaai.com）：国内后端，需 key。
+    pub bocha: String,
+    /// 智谱 Web Search（open.bigmodel.cn）：国内后端，需 key。
+    pub zhipu: String,
+    /// 百度千帆 AI 搜索（qianfan.baidubce.com）：国内后端，需 key。
+    pub qianfan: String,
     /// 豆包（火山引擎）TTS：应用 App ID（为空表示未配置）。
     pub doubao_app_id: String,
     /// 豆包（火山引擎）TTS：Access Token（为空表示未配置）。
@@ -167,6 +186,47 @@ impl VideoConfig {
     /// 是否需要用户提供封面图（自选来源但没给图 = 需要前端提示）。
     pub fn needs_cover_file(&self) -> bool {
         self.cover == "custom" && self.cover_path.trim().is_empty()
+    }
+}
+
+/// 主题搜索（`search.json`）：用哪个后端、取几条、全部失败时怎么办。
+///
+/// 凭证不在这里，仍放在 `api_keys.json`（见 [`ApiKeys`]）。默认 `provider = "auto"`，
+/// 管道按「Exa 托管 MCP → 有 key 的商业后端 → DuckDuckGo」依次尝试。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SearchConfig {
+    /// `"auto"` | `"exa"` | `"serper"` | `"bocha"` | `"zhipu"` | `"qianfan"` | `"ddg"`。
+    pub provider: String,
+    /// 期望结果条数（1-20，默认 5）。
+    pub num_results: usize,
+    /// 所有后端都失败时，是否降级为「用模型自带知识继续生成」（转录稿会标注未经联网检索）。
+    pub degrade_without_search: bool,
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        Self {
+            provider: "auto".into(),
+            num_results: 5,
+            degrade_without_search: true,
+        }
+    }
+}
+
+impl SearchConfig {
+    /// 归一化：未知 provider 回落 `auto`，条数夹到 1-20。
+    pub fn normalize(&mut self) {
+        self.provider = match self.provider.trim().to_lowercase().as_str() {
+            "exa" | "exa-mcp" | "mcp" => "exa".into(),
+            "serper" | "google" | "serper.dev" => "serper".into(),
+            "bocha" | "博查" => "bocha".into(),
+            "zhipu" | "glm" | "智谱" => "zhipu".into(),
+            "qianfan" | "baidu" | "千帆" | "百度" => "qianfan".into(),
+            "ddg" | "duckduckgo" => "ddg".into(),
+            _ => "auto".into(),
+        };
+        self.num_results = self.num_results.clamp(1, 20);
     }
 }
 
@@ -395,6 +455,34 @@ pub fn get_video_config(app: AppHandle) -> Result<VideoConfig, String> {
 pub fn save_video_config(app: AppHandle, mut config: VideoConfig) -> Result<(), String> {
     config.normalize();
     let p = video_path(&app)?;
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let s = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    std::fs::write(&p, s).map_err(|e| e.to_string())
+}
+
+fn search_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_dir(app)?.join("search.json"))
+}
+
+#[tauri::command]
+pub fn get_search_config(app: AppHandle) -> Result<SearchConfig, String> {
+    let p = search_path(&app)?;
+    let mut cfg: SearchConfig = if !p.exists() {
+        SearchConfig::default()
+    } else {
+        let s = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+        serde_json::from_str(&s).map_err(|e| e.to_string())?
+    };
+    cfg.normalize();
+    Ok(cfg)
+}
+
+#[tauri::command]
+pub fn save_search_config(app: AppHandle, mut config: SearchConfig) -> Result<(), String> {
+    config.normalize();
+    let p = search_path(&app)?;
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }

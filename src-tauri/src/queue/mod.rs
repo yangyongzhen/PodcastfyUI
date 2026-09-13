@@ -88,9 +88,19 @@ impl QueueManager {
         }
     }
 
+    /// 取任务表锁。
+    ///
+    /// 后台 task 线程 panic 会毒化这把 Mutex；此处若直接 `unwrap()`，主线程
+    /// （GTK 事件循环，例如 `list()`）就会踩 `PoisonError` 再 panic 一次，而 GTK
+    /// 回调不能 unwind → 整个进程 abort、窗口消失。任务表的数据本身仍然一致，
+    /// 取内层数据继续用即可。
+    fn lock_tasks(&self) -> std::sync::MutexGuard<'_, HashMap<String, Task>> {
+        self.tasks.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn update(&self, id: &str, app: &AppHandle, f: impl FnOnce(&mut Task)) {
         let clone = {
-            let mut m = self.tasks.lock().unwrap();
+            let mut m = self.lock_tasks();
             m.get_mut(id).map(|t| {
                 f(t);
                 t.clone()
@@ -123,30 +133,33 @@ impl QueueManager {
             video_path: None,
             video_error: None,
         };
-        self.tasks.lock().unwrap().insert(id.clone(), task.clone());
+        self.lock_tasks().insert(id.clone(), task.clone());
         let _ = app.emit("task-update", &task);
 
         let queue = self.clone();
         let app2 = app.clone();
         let id2 = id.clone();
-        tokio::spawn(async move {
+        // 必须用 tauri 的运行时句柄，不能用裸 `tokio::spawn`：
+        // 同步命令跑在主线程（GTK 事件循环）上，那里没有 Tokio reactor，
+        // `tokio::spawn` 会 panic，而 GTK 回调不能 unwind，会直接把进程 abort。
+        tauri::async_runtime::spawn(async move {
             pipeline::run(&queue, &app2, &id2, input).await;
         });
         Ok(id)
     }
 
     pub fn list(&self) -> Vec<Task> {
-        let mut v: Vec<Task> = self.tasks.lock().unwrap().values().cloned().collect();
+        let mut v: Vec<Task> = self.lock_tasks().values().cloned().collect();
         v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         v
     }
 
     pub fn get(&self, id: &str) -> Option<Task> {
-        self.tasks.lock().unwrap().get(id).cloned()
+        self.lock_tasks().get(id).cloned()
     }
 
     pub fn cancel(&self, id: &str) -> bool {
-        let mut m = self.tasks.lock().unwrap();
+        let mut m = self.lock_tasks();
         if let Some(t) = m.get_mut(id) {
             if !matches!(
                 t.status,
@@ -161,7 +174,7 @@ impl QueueManager {
     }
 
     pub fn delete(&self, id: &str) -> bool {
-        self.tasks.lock().unwrap().remove(id).is_some()
+        self.lock_tasks().remove(id).is_some()
     }
 
     pub fn get_transcript(&self, id: &str) -> Result<Option<String>, String> {
@@ -179,7 +192,7 @@ impl QueueManager {
             .clone();
         std::fs::write(&p, content).map_err(|e| e.to_string())?;
         t.transcript_path = Some(p);
-        self.tasks.lock().unwrap().insert(id.to_string(), t);
+        self.lock_tasks().insert(id.to_string(), t);
         Ok(())
     }
 
@@ -356,4 +369,45 @@ pub fn open_video_file(state: State<'_, Arc<QueueManager>>, id: String) -> Resul
     let t = state.get(&id).ok_or_else(|| format!("task not found: {id}"))?;
     let p = t.video_path.clone().ok_or("no video file yet")?;
     tauri_plugin_opener::open_path(&p, None::<&str>).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// 回归测试：在没有 Tokio reactor 的线程上派生异步任务。
+    ///
+    /// 这正是 Tauri **同步**命令的执行环境（GTK 主线程）。此处若用裸 `tokio::spawn`
+    /// 会 panic "there is no reactor running"，而 GTK 回调不能 unwind，第二次 panic
+    /// 会把整个进程 abort（窗口直接消失）。必须走 `tauri::async_runtime`。
+    #[test]
+    fn async_runtime_spawn_works_off_runtime_thread() {
+        let h = std::thread::spawn(|| {
+            let (tx, rx) = mpsc::channel();
+            tauri::async_runtime::spawn(async move {
+                let _ = tx.send(7u8);
+            });
+            rx.recv_timeout(Duration::from_secs(10))
+        });
+        let got = h.join().expect("派生线程自身 panic 了");
+        assert!(matches!(got, Ok(7)), "非运行时线程上的 spawn 没有跑起来: {got:?}");
+    }
+
+    /// 回归测试：后台 task 线程 panic 毒化队列锁后，主线程读数不能跟着 panic。
+    ///
+    /// 之前 `list()` 等是 `lock().unwrap()`：毒化后在 GTK 主线程再 panic 一次，
+    /// 而 GTK 回调不能 unwind → 整个进程 abort（用户看到的就是「窗口消失」）。
+    #[test]
+    fn queue_survives_poisoned_lock() {
+        let q = super::QueueManager::new();
+        let holder = q.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = holder.tasks.lock().unwrap();
+            panic!("模拟 task 线程持锁时 panic");
+        }));
+        assert!(q.tasks.is_poisoned(), "测试前提不成立：锁没有被毒化");
+        assert!(q.list().is_empty(), "毒化后 list() 仍必须可用");
+        assert!(q.get("missing").is_none(), "毒化后 get() 仍必须可用");
+    }
 }

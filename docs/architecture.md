@@ -35,6 +35,11 @@
 
 ## 2. 生成流水线（pipeline.rs）
 
+> 主题搜索（只给主题、不给 URL 时）：`extractor::search_topic()` 按
+> **exa（托管 MCP，免密钥）→ serper → bocha → zhipu → qianfan → ddg** 依次尝试，没配 key 的后端
+> 自动跳过；全部失败且 `search.json` 的 `degrade_without_search` 为真（默认）时，管道降级为
+> 「用模型自带知识继续生成」并在素材里标注未联网核实。详见 `docs/api.md` 的「主题搜索」。
+
 ```
 输入(urls/pdfs/text/topic/longform)
   │

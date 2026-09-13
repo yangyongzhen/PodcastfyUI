@@ -107,6 +107,32 @@ const un = await listen<Task>("task-update", (e) => console.log(e.payload));
 
 本地文件用 `convertFileSrc(path)` 转成 `asset://` URL 后直接给 `<audio src>`（Tauri 内置 asset 协议，无需额外权限配置）。
 
+## 主题搜索（search.json + 兜底链）
+
+「只给一个主题」时，管道按下列顺序找素材（`provider = "auto"`）：`exa`（托管 MCP，**免密钥**）
+→ `serper` → `bocha` → `zhipu` → `qianfan` → `ddg`。没配 key 的商业后端自动跳过；显式指定
+`provider` 时只试该后端。
+
+| 命令 / 密钥字段 | 说明 |
+|---|---|
+| `get_search_config` / `save_search_config` | 读写 `search.json` |
+| `ApiKeys.exa` / `.serper` / `.bocha` / `.zhipu` / `.qianfan` | 各后端密钥，都可空；Exa 留空也能搜（填了提高配额） |
+
+`search.json` 字段：
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `provider` | string | `"auto"` | `auto` / `exa` / `serper` / `bocha` / `zhipu` / `qianfan` / `ddg` |
+| `num_results` | number | `5` | 期望条数，归一化夹到 1-20 |
+| `degrade_without_search` | bool | `true` | 所有后端都失败时，是否用模型自带知识继续生成 |
+
+失败行为：为真 → 任务继续，素材中标注「未联网核实」，阶段文案为
+`search unavailable — using model knowledge…`；为假 → 任务按失败处理，错误提示改用 URL /
+粘贴文本或补配密钥。
+
+探针：`cd src-tauri && cargo run --example search_probe [-- "主题" 后端名]`（不读应用配置、
+所有 key 为空时验证 auto → Exa）。
+
 ## 视频导出（L1 封面 / L2 波形）
 
 | 项 | 说明 |

@@ -44,6 +44,8 @@ pub fn run() {
             config::save_conversation_config,
             config::get_video_config,
             config::save_video_config,
+            config::get_search_config,
+            config::save_search_config,
             video::video_font_status,
             queue::export_video_task,
             queue::open_video_file,

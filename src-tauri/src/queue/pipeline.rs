@@ -6,7 +6,7 @@
 use super::{QueueManager, TaskInput, TaskStatus};
 use crate::audio;
 use crate::config::{self, load_settings};
-use crate::extractor::Extractor;
+use crate::extractor::{Extractor, SearchCfg};
 use crate::generator::{Generator, GeneratorConfig, Provider};
 use crate::tts;
 use futures::future::join_all;
@@ -15,6 +15,19 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 
 const WORKSPACE: &str = "tasks";
+
+/// 组装主题搜索配置：后端与条数来自 `search.json`，凭证来自 `api_keys.json`。
+fn search_cfg(settings: &config::Settings) -> SearchCfg {
+    SearchCfg {
+        provider: settings.search.provider.clone(),
+        num_results: settings.search.num_results,
+        exa_key: settings.keys.exa.clone(),
+        serper_key: settings.keys.serper.clone(),
+        bocha_key: settings.keys.bocha.clone(),
+        zhipu_key: settings.keys.zhipu.clone(),
+        qianfan_key: settings.keys.qianfan.clone(),
+    }
+}
 
 pub(super) async fn run(
     queue: &QueueManager,
@@ -38,7 +51,7 @@ async fn execute(
     input: TaskInput,
 ) -> Result<(), String> {
     let settings = load_settings(app);
-    let conv = settings.conversation;
+    let conv = settings.conversation.clone();
 
     let task_dir = app
         .path()
@@ -47,29 +60,35 @@ async fn execute(
         .join(WORKSPACE)
         .join(id);
     let _ = tokio::fs::create_dir_all(&task_dir).await;
+    tracing::info!("task {id}: workspace ready");
     let transcript_path = task_dir.join("transcript.txt");
     let audio_path = task_dir.join("podcast.mp3");
 
     // ------------------------------------------------------------------
     // 1. Extraction (progress 0-15)
     // ------------------------------------------------------------------
+    tracing::info!("task {id}: stage -> extracting");
     queue.update(id, app, |t| {
         t.status = TaskStatus::Extracting;
         t.progress = 2;
         t.stage = "extracting sources…".into();
     });
+    tracing::info!("task {id}: stage update returned");
 
     let extractor = Extractor::new();
+    tracing::info!("task {id}: extractor ready");
     let mut sources: Vec<String> = Vec::new();
 
     let total_units = input.urls.len()
         + input.pdfs.len()
         + usize::from(!input.text.trim().is_empty())
         + usize::from(!input.topic.trim().is_empty());
+    tracing::info!("task {id}: {total_units} source unit(s) queued");
     let done_units = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     // URLs (parallel, but a few at a time to be polite).
     for chunk in input.urls.chunks(4) {
+        tracing::info!("task {id}: fetching {} url(s)", chunk.len());
         let lang: &str = &conv.output_language;
         let results = join_all(chunk.iter().map(|u| {
             let u = u.clone();
@@ -77,6 +96,7 @@ async fn execute(
             async move { ex.extract_url(&u, lang).await }
         }))
         .await;
+        tracing::info!("task {id}: url batch returned");
         for (u, r) in chunk.iter().zip(results.iter()) {
             match r {
                 Ok(text) => sources.push(text.clone()),
@@ -105,15 +125,44 @@ async fn execute(
 
     // Topic expansion.
     if !input.topic.trim().is_empty() {
+        let search = search_cfg(&settings);
+        let provider = if search.provider.trim().is_empty() {
+            "auto"
+        } else {
+            search.provider.trim()
+        };
+        tracing::info!(
+            "task {id}: topic search start (provider={provider}, num={})",
+            search.num_results
+        );
         queue.update(id, app, |t| t.stage = "searching web for topic…".into());
-        let topic_material = extractor
-            .search_topic(
-                input.topic.trim(),
-                (!settings.keys.serper.is_empty()).then(|| settings.keys.serper.as_str()),
-            )
-            .await
-            .map_err(|e| format!("topic search failed: {e}"))?;
-        sources.push(format!("Topic: {}\n\n{}", input.topic, topic_material));
+        match extractor.search_topic(input.topic.trim(), &search).await {
+            Ok(material) => {
+                tracing::info!("task {id}: topic search ok ({} chars)", material.len());
+                sources.push(format!("Topic: {}\n\n{material}", input.topic));
+            }
+            // 所有搜索后端都没答上：按设置决定是「降级继续」还是让任务失败。
+            Err(e) => {
+                tracing::warn!("task {id}: topic search failed: {e}");
+                if !settings.search.degrade_without_search {
+                    return Err(format!("topic search failed: {e}"));
+                }
+                queue.update(id, app, |t| {
+                    t.stage = "search unavailable — using model knowledge…".into()
+                });
+                tracing::warn!(
+                    "task {id}: degrading to model knowledge (no live web sources this run)"
+                );
+                sources.push(format!(
+                    "Topic: {}\n\n\
+                     NOTE: live web search was unavailable for this episode ({e}).\n\
+                     Write it from your own general knowledge instead, and say plainly in the\n\
+                     opening that the facts were NOT checked against live web sources — avoid\n\
+                     specific fresh figures, quotes, or dates that you cannot back up.\n",
+                    input.topic
+                ));
+            }
+        }
         bump(queue, app, id, &done_units, total_units, 2, 15);
     }
 
@@ -177,8 +226,10 @@ async fn execute(
     let progress_cb: Box<dyn Fn(&str, u8) + Send + Sync> =
         Box::new(move |stage, pct| {
             queue_cb.update(&id_cb, &app_cb, |t| {
-                let mapped = 15 + (pct * 35) / 100; // 15..50
-                t.progress = mapped.min(50).max(15);
+                // pct 是 u8：`pct * 35` 在 pct >= 8 时就会溢出（debug 构建直接 panic，
+                // 会让 task 线程崩溃并毒化队列锁）。先升到 u32 再算。
+                let mapped = 15u32 + (u32::from(pct) * 35) / 100; // 15..50
+                t.progress = mapped.min(50).max(15) as u8;
                 t.stage = stage.to_string();
             });
         });
@@ -563,7 +614,9 @@ fn bump(
     if total == 0 {
         return;
     }
-    let pct = lo + ((hi - lo) * d as u8) / total as u8;
+    // u8 里算 `(hi - lo) * d as u8`、`/ total as u8` 都会出事：前者乘法溢出，
+    // 后者在 total > 255 时截断（多行播客时可能变成 0 → 除零 panic）。升到 usize。
+    let pct = lo + (((hi - lo) as usize * d) / total) as u8;
     queue.update(id, app, |t| t.progress = pct);
 }
 

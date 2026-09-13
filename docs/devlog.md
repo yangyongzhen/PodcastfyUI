@@ -1,5 +1,44 @@
 # 开发日志
 
+## 2026-09-12 · 主题搜索兜底链：Exa 托管 MCP 免密钥可用（国内可达）
+
+### 背景
+「只给一个主题让应用去搜资料」这条路径在本机一直是死的：DuckDuckGo 解析到 IPv6，而本机没有
+v6 默认路由 → 必失败/挂起；Google 系在国内不通；taotoken 网关虽然有 `/v1/search` 端点，但现有
+key 是 **401（无该权限）**。用户提出参考 atomcode `web_search`（AI 搜索）的思路，并点名 Exa。
+
+### 实测（本机，任何 HTTP 码＝可达）
+| 后端 | 实测 | 结论 |
+|---|---|---|
+| `mcp.exa.ai/mcp`（MCP over Streamable HTTP） | `initialize` / `tools/list` / `tools/call` 全 200，**不带 key**；中文主题 2.6s 返回 5073 字中文正文 | ✅ **免密钥可用**（DNS 纯 IPv4，无 v6 坑） |
+| `api.exa.ai/search`（REST） | 402 | ❌ 需付费 key（且 DNS v6 优先） |
+| 博查 / 智谱 / 千帆 | 405 / 401 / 401 | ✅ 可达，需各自 key |
+| Google Serper（代理） | 403 | ✅ 可达，需 key |
+| taotoken `/v1/search` | 401（同一 key 的 `/v1/models` 是 200） | ⚠️ 端点存在但该 key 无权限 |
+| DuckDuckGo | 超时 | ❌ 本机不可达 |
+
+### 完成
+- `extractor/mod.rs`：新增 `SearchCfg`（运行期视图）+ `search_topic()` 兜底链，`auto` 顺序为
+  **exa → serper → bocha → zhipu → qianfan → ddg**，没配 key 的商业后端自动跳过；新增 Exa MCP
+  （`tools/call` + SSE/纯 JSON 双解析 + `isError` 处理）与博查 / 智谱 / 千帆三个 REST provider；
+  各后端 15-25s 短超时 + 明确错误文案（不再吐裸 reqwest builder error）。
+- 配置：`SearchConfig` + `search.json`（`provider` / `num_results` / `degrade_without_search`）+
+  `get_search_config` / `save_search_config`；`ApiKeys` 增 `exa` / `bocha` / `zhipu` / `qianfan`。
+- 管道：搜索全失败且 `degrade_without_search`（默认开）时**降级继续** —— 素材里写入
+  「live web search was unavailable」并要求模型在开场说明未联网核实；关掉则维持任务失败。
+- 前端：设置页「主题搜索」区块（后端下拉 / 条数 / 降级开关 / 5 个可选密钥）+ `SearchConfig`
+  TS 镜像 + i18n 词条。
+
+### 验证
+- `cargo run --example search_probe`（**全部 key 为空**、中文主题）：`SEARCH PROBE PASS`，
+  auto → Exa，1.7s 拿到 17043 字符真实中文正文。
+- `cargo check` exit=0；`cargo test --lib` 14 passed / 0 failed；`svelte-check` 0 errors / 0 warnings。
+- 新增探针 `src-tauri/examples/search_probe.rs`（可传主题与后端名复跑）。
+
+### 结论
+搜索链从「本机必失败」变成「零凭证即可用」，且不存在单点：有 key 的商业后端是可选取代，
+DuckDuckGo 只在其它都失败时兜底；全都失败还有「降级继续」保底。
+
 ## 2026-09-13 · 视频导出（L1 静态封面 + L2 波形）落地 + 真机实测
 
 ### 目标

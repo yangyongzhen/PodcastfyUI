@@ -7,6 +7,7 @@ import type {
   ApiKeys,
   ConversationConfig,
   LlmConfig,
+  SearchConfig,
   Task,
   TaskInput,
   VideoConfig,
@@ -80,6 +81,14 @@ export async function getVideoConfig(): Promise<VideoConfig> {
 
 export async function saveVideoConfig(config: VideoConfig): Promise<void> {
   return invoke("save_video_config", { config });
+}
+
+export async function getSearchConfig(): Promise<SearchConfig> {
+  return invoke("get_search_config");
+}
+
+export async function saveSearchConfig(config: SearchConfig): Promise<void> {
+  return invoke("save_search_config", { config });
 }
 
 /** 导出视频（可选第五阶段）。失败时后端仍保住音频产物，错误只在 video_error 上。 */

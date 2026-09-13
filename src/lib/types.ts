@@ -42,6 +42,14 @@ export interface ApiKeys {
   gemini: string;
   elevenlabs: string;
   serper: string;
+  /** Exa 托管 MCP：可空——不填也能搜，填了提高配额。 */
+  exa: string;
+  /** 博查 Web Search（国内）。 */
+  bocha: string;
+  /** 智谱 Web Search（国内）。 */
+  zhipu: string;
+  /** 百度千帆 AI 搜索（国内）。 */
+  qianfan: string;
   doubao_app_id: string;
   doubao_access_token: string;
 }
@@ -68,6 +76,16 @@ export interface VideoConfig {
   subtitle: string;
   /** 自定义中文字体路径，空 = 用随包字体。 */
   font_path: string;
+}
+
+/** 主题搜索配置（search.json）：后端、条数、全部失败时是否降级。 */
+export interface SearchConfig {
+  /** "auto" | "exa" | "serper" | "bocha" | "zhipu" | "qianfan" | "ddg" */
+  provider: string;
+  /** 结果条数 1-20。 */
+  num_results: number;
+  /** 所有后端都失败时，用模型自带知识继续生成（转录稿会标注未经联网检索）。 */
+  degrade_without_search: boolean;
 }
 
 export interface VoiceConfig {

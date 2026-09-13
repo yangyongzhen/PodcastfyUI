@@ -2,10 +2,16 @@
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import * as api from "../lib/api";
-  import type { ConversationConfig, LlmConfig, VideoConfig } from "../lib/types";
+  import type { ConversationConfig, LlmConfig, SearchConfig, VideoConfig } from "../lib/types";
   import { t, LOCALES, getLocale, setLocale, type Locale } from "../lib/i18n.svelte.js";
 
-  let keys = $state({ openai: "", anthropic: "", gemini: "", elevenlabs: "", serper: "", doubao_app_id: "", doubao_access_token: "", doubao_resource_id: "volc.service_type.10029", doubao_api_version: "v1" });
+  let keys = $state({ openai: "", anthropic: "", gemini: "", elevenlabs: "", serper: "", exa: "", bocha: "", zhipu: "", qianfan: "", doubao_app_id: "", doubao_access_token: "", doubao_resource_id: "volc.service_type.10029", doubao_api_version: "v1" });
+  // 与后端 SearchConfig 默认值对齐：读盘失败时保留这份默认值。
+  let search = $state<SearchConfig>({
+    provider: "auto",
+    num_results: 5,
+    degrade_without_search: true,
+  });
   let llm = $state<LlmConfig>({
     provider: "openai",
     model: "gpt-4o-mini",
@@ -40,6 +46,7 @@
       conv = await api.getConversationConfig();
       ttsModel = conv.text_to_speech.default_tts_model;
       vid = await api.getVideoConfig();
+      search = await api.getSearchConfig();
       await refreshFont(vid.font_path);
     } catch (e) {
       err = String(e);
@@ -98,6 +105,7 @@
         await api.saveConversationConfig(conv);
       }
       if (vid) await api.saveVideoConfig(vid);
+      await api.saveSearchConfig(search);
       msg = t("已保存");
     } catch (e) {
       err = String(e);
@@ -200,13 +208,47 @@
     </label>
   </div>
 
+  <h3>{t("主题搜索")}</h3>
+  <div class="form-grid">
+    <label>{t("搜索后端")}
+      <select bind:value={search.provider}>
+        <option value="auto">{t("auto（按可用性自动选择）")}</option>
+        <option value="exa">{t("Exa（免密钥可用）")}</option>
+        <option value="serper">Serper（Google）</option>
+        <option value="bocha">{t("博查（国内）")}</option>
+        <option value="zhipu">{t("智谱（国内）")}</option>
+        <option value="qianfan">{t("千帆 / 百度（国内）")}</option>
+        <option value="ddg">DuckDuckGo</option>
+      </select>
+    </label>
+    <label>{t("结果条数")}
+      <input type="number" min="1" max="20" bind:value={search.num_results} />
+    </label>
+    <label class="wide">
+      <input type="checkbox" bind:checked={search.degrade_without_search} />
+      {t("搜索全部失败时，用模型自带知识继续生成（转录稿会标注未经联网检索）")}
+    </label>
+    <label>{t("Exa 密钥（可空）")}
+      <input type="password" bind:value={keys.exa} placeholder={t("不填也能搜，填了提高配额")} />
+    </label>
+    <label>{t("Serper 密钥（可空）")}
+      <input type="password" bind:value={keys.serper} placeholder={t("不填则跳过该后端")} />
+    </label>
+    <label>{t("博查密钥（可空）")}
+      <input type="password" bind:value={keys.bocha} placeholder={t("不填则跳过该后端")} />
+    </label>
+    <label>{t("智谱密钥（可空）")}
+      <input type="password" bind:value={keys.zhipu} placeholder={t("不填则跳过该后端")} />
+    </label>
+    <label>{t("千帆密钥（可空）")}
+      <input type="password" bind:value={keys.qianfan} placeholder={t("不填则跳过该后端")} />
+    </label>
+  </div>
+
   <h3>{t("其它（可选）")}</h3>
   <div class="form-grid">
     <label>{t("ElevenLabs（预留）")}
       <input type="password" bind:value={keys.elevenlabs} placeholder={t("预留")} disabled />
-    </label>
-    <label>{t("Serper（主题搜索，可选）")}
-      <input type="password" bind:value={keys.serper} placeholder={t("不填则用 DuckDuckGo")} />
     </label>
   </div>
 
